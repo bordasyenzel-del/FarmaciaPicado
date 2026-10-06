@@ -1,170 +1,153 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Microsoft.Data.SqlClient;
-using FarmaciaPicado.Datos;
+using FarmaciaPicado.Negocio;
+using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
 {
     public partial class FrmReportes : Form
     {
+        private readonly ReporteNegocio negocio = new ReporteNegocio();
+        private CancellationTokenSource cts;
+
         public FrmReportes()
         {
             InitializeComponent();
         }
 
-        private void FrmReportes_Load(object sender, EventArgs e)
+        private async void FrmReportes_Load(object sender, EventArgs e)
         {
-            CargarStockBajo();
-            CargarProximosVencer();
-            CargarHistorial();
-
+            await CargarReportesAsync();
         }
-        private void CargarStockBajo()
+
+        // Carga los 3 reportes en un hilo secundario, mostrando el
+        // panel de "Cargando..." mientras tanto, con opción a cancelar.
+
+        private async Task CargarReportesAsync()
         {
+            cts = new CancellationTokenSource();
+            CancellationToken token = cts.Token;
+
+            MostrarCargando(true);
+
             try
             {
-                using (SqlConnection conexion = ConexionBD.ObtenerConexion())
-                {
-                    string sql = @"SELECT Nombre, Presentacion, StockActual, StockMinimo, FechaVencimiento
-                                   FROM Medicamentos
-                                   WHERE StockActual <= StockMinimo
-                                   ORDER BY StockActual ASC";
+                var resultado = await Task.Run(() => ObtenerDatosReportes(token), token);
 
-                    SqlCommand cmd = new SqlCommand(sql, conexion);
-                    conexion.Open();
-                    SqlDataReader lector = cmd.ExecuteReader();
+                // Volvemos automáticamente al hilo de la interfaz aquí
+                // (eso es lo que hace "await"), por eso ya podemos
+                // tocar los controles sin problema.
+                dgvStockBajo.DataSource = resultado.stockBajo;
+                ConfigurarColumnasStockBajo();
 
-                    DataTable tabla = new DataTable();
-                    tabla.Load(lector);
+                dgvProximosVencer.DataSource = resultado.proximosVencer;
+                ConfigurarColumnasProximosVencer();
 
-                    dgvStockBajo.DataSource = tabla;
-
-                    if (dgvStockBajo.Columns["Nombre"] != null)
-                        dgvStockBajo.Columns["Nombre"].HeaderText = "Nombre";
-                    if (dgvStockBajo.Columns["Presentacion"] != null)
-                        dgvStockBajo.Columns["Presentacion"].HeaderText = "Presentación";
-                    if (dgvStockBajo.Columns["StockActual"] != null)
-                        dgvStockBajo.Columns["StockActual"].HeaderText = "Stock Actual";
-                    if (dgvStockBajo.Columns["StockMinimo"] != null)
-                        dgvStockBajo.Columns["StockMinimo"].HeaderText = "Stock Mínimo";
-                    if (dgvStockBajo.Columns["FechaVencimiento"] != null)
-                        dgvStockBajo.Columns["FechaVencimiento"].HeaderText = "Fecha Vencimiento";
-                }
+                dgvHistorial.DataSource = resultado.historial;
+                ConfigurarColumnasHistorial();
+            }
+            catch (OperationCanceledException)
+            {
+                MessageBox.Show("Carga de reportes cancelada.", "Cancelado",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error al cargar el reporte de stock bajo:\n" + ex.Message, "Error",
+                MessageBox.Show("Error al cargar los reportes:\n" + ex.Message, "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                MostrarCargando(false);
             }
         }
 
-        // ---------------------------------------------------------
-        // Reporte 2: Próximos a vencer (dentro de 30 días)
-        // ---------------------------------------------------------
-        private void CargarProximosVencer()
+        private (List<Medicamento> stockBajo, List<Medicamento> proximosVencer, List<HistorialMovimiento> historial)
+            ObtenerDatosReportes(CancellationToken token)
         {
-            try
-            {
-                using (SqlConnection conexion = ConexionBD.ObtenerConexion())
-                {
-                    string sql = @"SELECT Nombre, Presentacion, StockActual, FechaVencimiento,
-                                          DATEDIFF(DAY, GETDATE(), FechaVencimiento) AS DiasParaVencer
-                                   FROM Medicamentos
-                                   WHERE FechaVencimiento <= DATEADD(DAY, 30, GETDATE())
-                                   ORDER BY FechaVencimiento ASC";
+            token.ThrowIfCancellationRequested();
+            var stockBajo = negocio.ObtenerStockBajo();
 
-                    SqlCommand cmd = new SqlCommand(sql, conexion);
-                    conexion.Open();
-                    SqlDataReader lector = cmd.ExecuteReader();
+            // Espera simulada: representa el tiempo que tomaría un reporte
+            // más pesado en un sistema con muchos más datos.
+            Thread.Sleep(800);
+            token.ThrowIfCancellationRequested();
 
-                    DataTable tabla = new DataTable();
-                    tabla.Load(lector);
+            var proximosVencer = negocio.ObtenerProximosVencer();
 
-                    dgvProximosVencer.DataSource = tabla;
+            Thread.Sleep(800);
+            token.ThrowIfCancellationRequested();
 
-                    if (dgvProximosVencer.Columns["Nombre"] != null)
-                        dgvProximosVencer.Columns["Nombre"].HeaderText = "Nombre";
-                    if (dgvProximosVencer.Columns["Presentacion"] != null)
-                        dgvProximosVencer.Columns["Presentacion"].HeaderText = "Presentación";
-                    if (dgvProximosVencer.Columns["StockActual"] != null)
-                        dgvProximosVencer.Columns["StockActual"].HeaderText = "Stock Actual";
-                    if (dgvProximosVencer.Columns["FechaVencimiento"] != null)
-                        dgvProximosVencer.Columns["FechaVencimiento"].HeaderText = "Fecha Vencimiento";
-                    if (dgvProximosVencer.Columns["DiasParaVencer"] != null)
-                        dgvProximosVencer.Columns["DiasParaVencer"].HeaderText = "Días Restantes";
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar el reporte de próximos a vencer:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            var historial = negocio.ObtenerHistorial();
+
+            return (stockBajo, proximosVencer, historial);
         }
 
+
+        // Mostrar / ocultar el panel de carga
+
+        private void MostrarCargando(bool mostrar)
+        {
+            panelCargando.Visible = mostrar;
+            tabReportes.Enabled = !mostrar;
+        }
+        private void btnCancelarCarga_Click(object sender, EventArgs e)
+        {
+            cts?.Cancel();
+        }
+
+
+        // Configuración de columnas de cada grid
         
-        private void CargarHistorial()
+        private void ConfigurarColumnasStockBajo()
         {
-            try
-            {
-                using (SqlConnection conexion = ConexionBD.ObtenerConexion())
-                {
-                    // UNION combina los resultados de Entradas y Salidas en una sola tabla,
-                    // agregando una columna "Tipo" para diferenciarlos
-                    string sql = @"
-                        SELECT 'Entrada' AS Tipo, M.Nombre AS Medicamento, E.Cantidad, 
-                               E.FechaEntrada AS Fecha, U.NombreUsuario AS Usuario
-                        FROM Entradas E
-                        INNER JOIN Medicamentos M ON E.IdMedicamento = M.IdMedicamento
-                        INNER JOIN Usuarios U ON E.IdUsuario = U.IdUsuario
- 
-                        UNION ALL
- 
-                        SELECT 'Salida' AS Tipo, M.Nombre AS Medicamento, S.Cantidad, 
-                               S.FechaSalida AS Fecha, U.NombreUsuario AS Usuario
-                        FROM Salidas S
-                        INNER JOIN Medicamentos M ON S.IdMedicamento = M.IdMedicamento
-                        INNER JOIN Usuarios U ON S.IdUsuario = U.IdUsuario
- 
-                        ORDER BY Fecha DESC";
+            OcultarSiExiste(dgvStockBajo, "IdMedicamento", "IdCategoria", "Categoria", "PrecioCompra", "PrecioVenta");
+            RenombrarSiExiste(dgvStockBajo, "Nombre", "Nombre");
+            RenombrarSiExiste(dgvStockBajo, "Presentacion", "Presentación");
+            RenombrarSiExiste(dgvStockBajo, "StockActual", "Stock Actual");
+            RenombrarSiExiste(dgvStockBajo, "StockMinimo", "Stock Mínimo");
+            RenombrarSiExiste(dgvStockBajo, "FechaVencimiento", "Fecha Vencimiento");
+        }
 
-                    SqlCommand cmd = new SqlCommand(sql, conexion);
-                    conexion.Open();
-                    SqlDataReader lector = cmd.ExecuteReader();
+        private void ConfigurarColumnasProximosVencer()
+        {
+            OcultarSiExiste(dgvProximosVencer, "IdMedicamento", "IdCategoria", "Categoria", "PrecioCompra", "PrecioVenta", "StockMinimo");
+            RenombrarSiExiste(dgvProximosVencer, "Nombre", "Nombre");
+            RenombrarSiExiste(dgvProximosVencer, "Presentacion", "Presentación");
+            RenombrarSiExiste(dgvProximosVencer, "StockActual", "Stock Actual");
+            RenombrarSiExiste(dgvProximosVencer, "FechaVencimiento", "Fecha Vencimiento");
+        }
 
-                    DataTable tabla = new DataTable();
-                    tabla.Load(lector);
+        private void ConfigurarColumnasHistorial()
+        {
+            RenombrarSiExiste(dgvHistorial, "Tipo", "Tipo");
+            RenombrarSiExiste(dgvHistorial, "Medicamento", "Medicamento");
+            RenombrarSiExiste(dgvHistorial, "Cantidad", "Cantidad");
+            RenombrarSiExiste(dgvHistorial, "Fecha", "Fecha");
+            RenombrarSiExiste(dgvHistorial, "Usuario", "Registrado por");
+        }
 
-                    dgvHistorial.DataSource = tabla;
+        private void OcultarSiExiste(DataGridView grid, params string[] columnas)
+        {
+            foreach (string c in columnas)
+                if (grid.Columns[c] != null)
+                    grid.Columns[c].Visible = false;
+        }
 
-                    if (dgvHistorial.Columns["Tipo"] != null)
-                        dgvHistorial.Columns["Tipo"].HeaderText = "Tipo";
-                    if (dgvHistorial.Columns["Medicamento"] != null)
-                        dgvHistorial.Columns["Medicamento"].HeaderText = "Medicamento";
-                    if (dgvHistorial.Columns["Cantidad"] != null)
-                        dgvHistorial.Columns["Cantidad"].HeaderText = "Cantidad";
-                    if (dgvHistorial.Columns["Fecha"] != null)
-                        dgvHistorial.Columns["Fecha"].HeaderText = "Fecha";
-                    if (dgvHistorial.Columns["Usuario"] != null)
-                        dgvHistorial.Columns["Usuario"].HeaderText = "Registrado por";
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar el historial:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+        private void RenombrarSiExiste(DataGridView grid, string columna, string nuevoTitulo)
+        {
+            if (grid.Columns[columna] != null)
+                grid.Columns[columna].HeaderText = nuevoTitulo;
         }
 
         private void btnVolver_Click(object sender, EventArgs e)
         {
             this.Close();
         }
+
+        
     }
 }

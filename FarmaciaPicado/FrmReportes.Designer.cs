@@ -30,6 +30,9 @@
         {
             tabReportes = new TabControl();
             tabStockBajo = new TabPage();
+            panelCargando = new Panel();
+            btnCancelarCarga = new Button();
+            lblCargando = new Label();
             dgvStockBajo = new DataGridView();
             tabProximosVencer = new TabPage();
             dgvProximosVencer = new DataGridView();
@@ -37,18 +40,15 @@
             dgvHistorial = new DataGridView();
             panelSuperior = new Panel();
             btnVolver = new Button();
-            panelCargando = new Panel();
-            lblCargando = new Label();
-            btnCancelarCarga = new Button();
             tabReportes.SuspendLayout();
             tabStockBajo.SuspendLayout();
+            panelCargando.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)dgvStockBajo).BeginInit();
             tabProximosVencer.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)dgvProximosVencer).BeginInit();
             tabHistorial.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)dgvHistorial).BeginInit();
             panelSuperior.SuspendLayout();
-            panelCargando.SuspendLayout();
             SuspendLayout();
             // 
             // tabReportes
@@ -65,7 +65,6 @@
             // 
             // tabStockBajo
             // 
-            tabStockBajo.Controls.Add(panelCargando);
             tabStockBajo.Controls.Add(dgvStockBajo);
             tabStockBajo.Location = new Point(4, 29);
             tabStockBajo.Name = "tabStockBajo";
@@ -74,6 +73,42 @@
             tabStockBajo.TabIndex = 0;
             tabStockBajo.Text = "Stock Bajo";
             tabStockBajo.UseVisualStyleBackColor = true;
+            // 
+            // panelCargando
+            // 
+            panelCargando.BackColor = Color.Gainsboro;
+            panelCargando.Controls.Add(btnCancelarCarga);
+            panelCargando.Controls.Add(lblCargando);
+            panelCargando.Dock = DockStyle.Fill;
+            panelCargando.Location = new Point(3, 3);
+            panelCargando.Name = "panelCargando";
+            panelCargando.Size = new Size(786, 355);
+            panelCargando.TabIndex = 2;
+            panelCargando.Visible = false;
+            // 
+            // btnCancelarCarga
+            // 
+            btnCancelarCarga.BackColor = Color.Red;
+            btnCancelarCarga.FlatStyle = FlatStyle.Flat;
+            btnCancelarCarga.ForeColor = Color.White;
+            btnCancelarCarga.Location = new Point(354, 245);
+            btnCancelarCarga.Name = "btnCancelarCarga";
+            btnCancelarCarga.Size = new Size(94, 29);
+            btnCancelarCarga.TabIndex = 1;
+            btnCancelarCarga.Text = "Cancelar";
+            btnCancelarCarga.UseVisualStyleBackColor = false;
+            btnCancelarCarga.Click += btnCancelarCarga_Click;
+            // 
+            // lblCargando
+            // 
+            lblCargando.Font = new Font("Segoe UI", 16F);
+            lblCargando.ForeColor = Color.DarkCyan;
+            lblCargando.Location = new Point(311, 147);
+            lblCargando.Name = "lblCargando";
+            lblCargando.Size = new Size(187, 44);
+            lblCargando.TabIndex = 0;
+            lblCargando.Text = "Cargando....";
+            lblCargando.TextAlign = ContentAlignment.MiddleCenter;
             // 
             // dgvStockBajo
             // 
@@ -151,47 +186,13 @@
             btnVolver.UseVisualStyleBackColor = false;
             btnVolver.Click += btnVolver_Click;
             // 
-            // panelCargando
-            // 
-            panelCargando.BackColor = Color.Gainsboro;
-            panelCargando.Controls.Add(btnCancelarCarga);
-            panelCargando.Controls.Add(lblCargando);
-            panelCargando.Dock = DockStyle.Fill;
-            panelCargando.Location = new Point(3, 3);
-            panelCargando.Name = "panelCargando";
-            panelCargando.Size = new Size(786, 355);
-            panelCargando.TabIndex = 2;
-            panelCargando.Visible = false;
-            // 
-            // lblCargando
-            // 
-            lblCargando.Font = new Font("Segoe UI", 16F);
-            lblCargando.ForeColor = Color.DarkCyan;
-            lblCargando.Location = new Point(311, 147);
-            lblCargando.Name = "lblCargando";
-            lblCargando.Size = new Size(187, 44);
-            lblCargando.TabIndex = 0;
-            lblCargando.Text = "Cargando....";
-            lblCargando.TextAlign = ContentAlignment.MiddleCenter;
-            // 
-            // btnCancelarCarga
-            // 
-            btnCancelarCarga.BackColor = Color.Red;
-            btnCancelarCarga.FlatStyle = FlatStyle.Flat;
-            btnCancelarCarga.ForeColor = Color.White;
-            btnCancelarCarga.Location = new Point(354, 245);
-            btnCancelarCarga.Name = "btnCancelarCarga";
-            btnCancelarCarga.Size = new Size(94, 29);
-            btnCancelarCarga.TabIndex = 1;
-            btnCancelarCarga.Text = "Cancelar";
-            btnCancelarCarga.UseVisualStyleBackColor = false;
-            // 
             // FrmReportes
             // 
             AutoScaleDimensions = new SizeF(8F, 20F);
             AutoScaleMode = AutoScaleMode.Font;
             BackColor = Color.White;
             ClientSize = new Size(800, 450);
+            Controls.Add(panelCargando);
             Controls.Add(panelSuperior);
             Controls.Add(tabReportes);
             Name = "FrmReportes";
@@ -201,13 +202,13 @@
             Load += FrmReportes_Load;
             tabReportes.ResumeLayout(false);
             tabStockBajo.ResumeLayout(false);
+            panelCargando.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dgvStockBajo).EndInit();
             tabProximosVencer.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dgvProximosVencer).EndInit();
             tabHistorial.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)dgvHistorial).EndInit();
             panelSuperior.ResumeLayout(false);
-            panelCargando.ResumeLayout(false);
             ResumeLayout(false);
         }
 
