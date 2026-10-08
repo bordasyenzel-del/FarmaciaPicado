@@ -26,6 +26,9 @@ namespace FarmaciaPicado
         private static readonly Color ColorTexto = Color.FromArgb(31, 41, 55);
         private static readonly Color ColorTextoSuave = Color.FromArgb(107, 114, 128);
 
+        // Program.cs lo lee al cerrarse el menú para saber si debe mostrar el login otra vez
+        public bool CerroSesion { get; private set; }
+
         // ---- Datos de sesión ----
         private readonly int idUsuario;
         private readonly string nombreUsuario;
@@ -211,7 +214,7 @@ namespace FarmaciaPicado
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (resultado == DialogResult.Yes)
             {
-                new FrmLogin().Show();
+                CerroSesion = true;
                 this.Close();
             }
         }
