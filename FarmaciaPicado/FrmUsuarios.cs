@@ -4,14 +4,21 @@ using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using Guna.UI2.WinForms;
-using FarmaciaPicado.AccesoDatos;
+using Microsoft.Data.SqlClient;
+using FarmaciaPicado.Negocio;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
 {
     public partial class FrmUsuarios : Form
     {
-        private readonly UsuarioDAO dao = new UsuarioDAO();
+        private const string RolAdministrador = "Administrador";
+
+        // Ahora el formulario habla con la capa de negocio (que valida y limpia los datos)
+        // y ya no directamente con el DAO.
+        private readonly UsuarioNegocio negocio = new UsuarioNegocio();
+        private readonly int idUsuarioActual; // usuario que tiene la sesión abierta
+        private List<Usuario> usuarios = new List<Usuario>();
         private List<Rol> roles = new List<Rol>();
         private int idSeleccionado = 0;
         private bool cargando = false;
@@ -23,8 +30,11 @@ namespace FarmaciaPicado
         private Guna2DataGridView dgv;
         private Guna2Button btnGuardar, btnNuevo, btnEliminar;
 
-        public FrmUsuarios()
+        public FrmUsuarios() : this(0) { }
+
+        public FrmUsuarios(int idUsuarioActual)
         {
+            this.idUsuarioActual = idUsuarioActual;
             InitializeComponent();
             ConstruirUI();
             this.Load += (s, e) =>
@@ -32,6 +42,12 @@ namespace FarmaciaPicado
                 try { CargarRoles(); CargarLista(); Limpiar(); }
                 catch (Exception ex) { EstiloUI.Error("Error al cargar los datos:\n" + ex.Message); }
             };
+        }
+
+        // Método vacío: algunas copias locales del diseñador lo referencian.
+        // La carga de datos real se hace en el evento Load del constructor.
+        private void FrmUsuarios_Load(object sender, EventArgs e)
+        {
         }
 
         private void ConstruirUI()
@@ -94,7 +110,7 @@ namespace FarmaciaPicado
 
         private void CargarRoles()
         {
-            roles = dao.ObtenerRoles();
+            roles = negocio.ObtenerRoles();
             cboRol.DataSource = null;
             cboRol.DisplayMember = "NombreRol";
             cboRol.ValueMember = "IdRol";
@@ -104,8 +120,9 @@ namespace FarmaciaPicado
         private void CargarLista()
         {
             cargando = true;
+            usuarios = negocio.Obtener();
             dgv.Rows.Clear();
-            foreach (Usuario u in dao.Obtener())
+            foreach (Usuario u in usuarios)
             {
                 int i = dgv.Rows.Add(u.NombreUsuario, u.Rol, u.Activo ? "Activo" : "Inactivo");
                 var fila = dgv.Rows[i];
@@ -115,6 +132,19 @@ namespace FarmaciaPicado
             dgv.ClearSelection();
             dgv.CurrentCell = null;
             cargando = false;
+        }
+
+        // ¿Existe algún otro administrador activo, aparte del usuario indicado?
+        private bool HayOtroAdminActivo(int excluirIdUsuario)
+        {
+            return usuarios.Any(x => x.IdUsuario != excluirIdUsuario
+                                     && x.Rol == RolAdministrador
+                                     && x.Activo);
+        }
+
+        private Usuario BuscarEnLista(int idUsuario)
+        {
+            return usuarios.FirstOrDefault(x => x.IdUsuario == idUsuario);
         }
 
         private void Dgv_SelectionChanged(object sender, EventArgs e)
@@ -156,26 +186,55 @@ namespace FarmaciaPicado
 
             if (nombre == "") { EstiloUI.Aviso("Ingrese el nombre de usuario."); return; }
             if (cboRol.SelectedValue == null) { EstiloUI.Aviso("Seleccione un rol."); return; }
-            if (idSeleccionado == 0 && contrasena == "") { EstiloUI.Aviso("Ingrese una contraseña para el nuevo usuario."); return; }
+            // Una contraseña de solo espacios cuenta como vacía
+            if (idSeleccionado == 0 && string.IsNullOrWhiteSpace(contrasena)) { EstiloUI.Aviso("Ingrese una contraseña para el nuevo usuario."); return; }
+
+            int idRol = Convert.ToInt32(cboRol.SelectedValue);
+            Rol rolElegido = roles.FirstOrDefault(r => r.IdRol == idRol);
+
+            // ---- Protecciones al editar un usuario existente ----
+            if (idSeleccionado != 0)
+            {
+                if (idSeleccionado == idUsuarioActual && !chkActivo.Checked)
+                {
+                    EstiloUI.Aviso("No puedes desactivar el usuario con el que iniciaste sesión.");
+                    return;
+                }
+
+                Usuario original = BuscarEnLista(idSeleccionado);
+                bool eraAdminActivo = original != null && original.Rol == RolAdministrador && original.Activo;
+                bool seguiraAdminActivo = rolElegido != null && rolElegido.NombreRol == RolAdministrador && chkActivo.Checked;
+
+                if (eraAdminActivo && !seguiraAdminActivo && !HayOtroAdminActivo(idSeleccionado))
+                {
+                    EstiloUI.Aviso("Debe quedar al menos un administrador activo. Asigna ese rol a otro usuario antes de hacer este cambio.");
+                    return;
+                }
+            }
 
             var u = new Usuario
             {
                 IdUsuario = idSeleccionado,
                 NombreUsuario = nombre,
-                Contrasena = contrasena,
-                IdRol = Convert.ToInt32(cboRol.SelectedValue),
+                IdRol = idRol,
                 Activo = chkActivo.Checked
             };
 
             try
             {
-                if (idSeleccionado == 0) dao.Insertar(u);
-                else if (contrasena == "") dao.ActualizarSinContrasena(u);
-                else dao.ActualizarConContrasena(u);
+                // UsuarioNegocio.Guardar valida, limpia los espacios de la contraseña
+                // y decide si inserta, actualiza con o sin contraseña.
+                negocio.Guardar(u, contrasena);
 
                 EstiloUI.Info(idSeleccionado == 0 ? "Usuario creado." : "Usuario actualizado.");
                 CargarLista();
                 Limpiar();
+            }
+            catch (SqlException ex) when (ex.Number == 2627 || ex.Number == 2601)
+            {
+                // 2627 / 2601 = valor duplicado en una columna UNIQUE
+                EstiloUI.Aviso("Ya existe un usuario llamado \"" + nombre + "\". Elige otro nombre.");
+                txtUsuario.Focus();
             }
             catch (Exception ex)
             {
@@ -186,18 +245,46 @@ namespace FarmaciaPicado
         private void BtnEliminar_Click(object sender, EventArgs e)
         {
             if (idSeleccionado == 0) { EstiloUI.Aviso("Seleccione un usuario de la lista."); return; }
+
+            if (idSeleccionado == idUsuarioActual)
+            {
+                EstiloUI.Aviso("No puedes eliminar el usuario con el que iniciaste sesión.");
+                return;
+            }
+
+            Usuario original = BuscarEnLista(idSeleccionado);
+            bool esAdminActivo = original != null && original.Rol == RolAdministrador && original.Activo;
+            if (esAdminActivo && !HayOtroAdminActivo(idSeleccionado))
+            {
+                EstiloUI.Aviso("No puedes eliminar al único administrador activo.");
+                return;
+            }
+
             if (!EstiloUI.Confirmar("¿Eliminar al usuario \"" + txtUsuario.Text + "\"?")) return;
 
             try
             {
-                dao.Eliminar(idSeleccionado);
+                negocio.Eliminar(idSeleccionado);
                 CargarLista();
                 Limpiar();
             }
+            catch (SqlException ex) when (ex.Number == 547)
+            {
+                // 547 = conflicto con una llave foránea (el usuario tiene entradas o salidas)
+                EstiloUI.Aviso("Este usuario tiene entradas o salidas registradas y no se puede eliminar.\n\n" +
+                               "Para impedir que entre al sistema, desmarca \"Usuario activo\" y guarda.");
+            }
             catch (Exception ex)
             {
-                EstiloUI.Error("No se pudo eliminar. Puede que tenga movimientos registrados; en ese caso desactívalo en vez de eliminarlo.\n\n" + ex.Message);
+                EstiloUI.Error("No se pudo eliminar:\n" + ex.Message);
             }
         }
     }
 }
+
+
+
+
+
+
+
