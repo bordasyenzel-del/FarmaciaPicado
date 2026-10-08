@@ -1,289 +1,250 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
-using FarmaciaPicado.Negocio;
+using Guna.UI2.WinForms;
+using FarmaciaPicado.Orm;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
 {
     public partial class FrmMedicamentos : Form
     {
-        private readonly MedicamentoNegocio negocio = new MedicamentoNegocio();
-        private int idMedicamentoSeleccionado = 0;
+        private readonly MedicamentoServicioEf dao = new MedicamentoServicioEf();
+        private List<Categoria> categorias = new List<Categoria>();
+        private int idSeleccionado = 0;
+        private bool cargando = false;
+
+        private Label lblModo;
+        private Guna2TextBox txtBuscar, txtNombre, txtPresentacion, txtPrecioCompra, txtPrecioVenta, txtStock, txtStockMin;
+        private Guna2ComboBox cboCategoria;
+        private Guna2DateTimePicker dtpVence;
+        private Guna2DataGridView dgv;
+        private Guna2Button btnGuardar, btnNuevo, btnEliminar;
 
         public FrmMedicamentos()
         {
             InitializeComponent();
+            ConstruirUI();
+            this.Load += (s, e) =>
+            {
+                try
+                {
+                    CargarCategorias();
+                    CargarLista("");
+                    Limpiar();
+                }
+                catch (Exception ex) { EstiloUI.Error("Error al cargar los datos:\n" + ex.Message); }
+            };
         }
 
-        private void FrmMedicamentos_Load(object sender, EventArgs e)
+        private void ConstruirUI()
         {
-            CargarCategorias();
-            CargarMedicamentos();
-            HabilitarCampos(false);
+            var cuerpo = EstiloUI.ConfigurarForm(this, "Medicamentos", "Altas, bajas y modificaciones del inventario", 1200, 740);
+            EstiloUI.DosColumnas(cuerpo, 380, out Guna2Panel izq, out Guna2Panel der);
+
+            // ---------- Formulario (izquierda) ----------
+            lblModo = EstiloUI.TituloTarjeta("Nuevo medicamento");
+            izq.Controls.Add(lblModo);
+
+            txtNombre = EstiloUI.Caja("Nombre del medicamento");
+            txtPresentacion = EstiloUI.Caja("Ej: Tabletas 500 mg");
+            cboCategoria = EstiloUI.Combo();
+            txtPrecioCompra = EstiloUI.Caja("0.00");
+            txtPrecioVenta = EstiloUI.Caja("0.00");
+            txtStock = EstiloUI.Caja("0");
+            txtStockMin = EstiloUI.Caja("0");
+            dtpVence = EstiloUI.Fecha();
+
+            EstiloUI.Campo(izq, "Nombre", txtNombre, 20, 56, 340);
+            EstiloUI.Campo(izq, "Presentación", txtPresentacion, 20, 118, 340);
+            EstiloUI.Campo(izq, "Categoría", cboCategoria, 20, 180, 340);
+            EstiloUI.Campo(izq, "Precio de compra", txtPrecioCompra, 20, 242, 165);
+            EstiloUI.Campo(izq, "Precio de venta", txtPrecioVenta, 195, 242, 165);
+            EstiloUI.Campo(izq, "Stock actual", txtStock, 20, 304, 165);
+            EstiloUI.Campo(izq, "Stock mínimo", txtStockMin, 195, 304, 165);
+            EstiloUI.Campo(izq, "Fecha de vencimiento", dtpVence, 20, 366, 340);
+
+            btnGuardar = EstiloUI.Boton("Guardar", EstiloUI.Azul, 340);
+            btnGuardar.Location = new Point(20, 444);
+            btnNuevo = EstiloUI.Boton("Nuevo", EstiloUI.TextoSuave, 165);
+            btnNuevo.Location = new Point(20, 494);
+            btnEliminar = EstiloUI.Boton("Eliminar", EstiloUI.Rojo, 165);
+            btnEliminar.Location = new Point(195, 494);
+
+            btnGuardar.Click += BtnGuardar_Click;
+            btnNuevo.Click += (s, e) => Limpiar();
+            btnEliminar.Click += BtnEliminar_Click;
+
+            izq.Controls.Add(btnGuardar);
+            izq.Controls.Add(btnNuevo);
+            izq.Controls.Add(btnEliminar);
+
+            // ---------- Listado (derecha) ----------
+            der.Padding = new Padding(20, 96, 20, 20);
+
+            txtBuscar = EstiloUI.Caja("Buscar por nombre...");
+            txtBuscar.Location = new Point(20, 48);
+            txtBuscar.Width = 320;
+            txtBuscar.TextChanged += (s, e) =>
+            {
+                try { CargarLista(txtBuscar.Text); }
+                catch (Exception ex) { EstiloUI.Error(ex.Message); }
+            };
+
+            dgv = EstiloUI.CrearGrid();
+            dgv.Columns.Add("Nombre", "Nombre");
+            dgv.Columns.Add("Presentacion", "Presentación");
+            dgv.Columns.Add("Categoria", "Categoría");
+            dgv.Columns.Add("Precio", "P. venta");
+            dgv.Columns.Add("Stock", "Stock");
+            dgv.Columns.Add("Vence", "Vence");
+            EstiloUI.DesactivarOrden(dgv);
+            dgv.SelectionChanged += Dgv_SelectionChanged;
+
+            der.Controls.Add(dgv);
+            der.Controls.Add(EstiloUI.TituloTarjeta("Listado de medicamentos"));
+            der.Controls.Add(txtBuscar);
         }
 
-       
-        // Cargar el ComboBox de categorías (ahora vía Negocio)
-       
+        // =====================================================================
+        //  DATOS
+        // =====================================================================
         private void CargarCategorias()
         {
-            try
-            {
-                List<Categoria> categorias = negocio.ObtenerCategorias();
-                cmbCategoria.DataSource = categorias;
-                cmbCategoria.DisplayMember = "NombreCategoria";
-                cmbCategoria.ValueMember = "IdCategoria";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar categorías:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            categorias = dao.ObtenerCategorias();
+            cboCategoria.DataSource = null;
+            cboCategoria.DisplayMember = "NombreCategoria";
+            cboCategoria.ValueMember = "IdCategoria";
+            cboCategoria.DataSource = categorias;
         }
 
-        
-        private void CargarMedicamentos(string filtroNombre = "")
+        private void CargarLista(string filtro)
         {
-            try
+            cargando = true;
+            dgv.Rows.Clear();
+
+            foreach (Medicamento m in dao.Obtener(filtro ?? ""))
             {
-                List<Medicamento> medicamentos = negocio.Obtener(filtroNombre);
-                dgvMedicamentos.DataSource = medicamentos;
+                int i = dgv.Rows.Add(m.Nombre, m.Presentacion, m.Categoria, m.PrecioVenta.ToString("C2"),
+                                     m.StockActual, m.FechaVencimiento.ToString("dd/MM/yyyy"));
+                var fila = dgv.Rows[i];
+                fila.Tag = m;
 
-                if (dgvMedicamentos.Columns["IdMedicamento"] != null)
-                    dgvMedicamentos.Columns["IdMedicamento"].Visible = false;
-                if (dgvMedicamentos.Columns["IdCategoria"] != null)
-                    dgvMedicamentos.Columns["IdCategoria"].Visible = false;
+                if (m.StockActual <= m.StockMinimo)
+                    fila.Cells["Stock"].Style.ForeColor = EstiloUI.Rojo;
 
-                if (dgvMedicamentos.Columns["Nombre"] != null)
-                    dgvMedicamentos.Columns["Nombre"].HeaderText = "Nombre";
-                if (dgvMedicamentos.Columns["Presentacion"] != null)
-                    dgvMedicamentos.Columns["Presentacion"].HeaderText = "Presentación";
-                if (dgvMedicamentos.Columns["Categoria"] != null)
-                    dgvMedicamentos.Columns["Categoria"].HeaderText = "Categoría";
-                if (dgvMedicamentos.Columns["PrecioCompra"] != null)
-                    dgvMedicamentos.Columns["PrecioCompra"].HeaderText = "Precio Compra";
-                if (dgvMedicamentos.Columns["PrecioVenta"] != null)
-                    dgvMedicamentos.Columns["PrecioVenta"].HeaderText = "Precio Venta";
-                if (dgvMedicamentos.Columns["StockActual"] != null)
-                    dgvMedicamentos.Columns["StockActual"].HeaderText = "Stock Actual";
-                if (dgvMedicamentos.Columns["StockMinimo"] != null)
-                    dgvMedicamentos.Columns["StockMinimo"].HeaderText = "Stock Mínimo";
-                if (dgvMedicamentos.Columns["FechaVencimiento"] != null)
-                    dgvMedicamentos.Columns["FechaVencimiento"].HeaderText = "Fecha Vencimiento";
-
-                dgvMedicamentos.MultiSelect = false;
-                dgvMedicamentos.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+                if (m.FechaVencimiento.Date < DateTime.Today)
+                    fila.Cells["Vence"].Style.ForeColor = EstiloUI.Rojo;
+                else if (m.FechaVencimiento.Date <= DateTime.Today.AddDays(30))
+                    fila.Cells["Vence"].Style.ForeColor = EstiloUI.Naranja;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar medicamentos:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+
+            dgv.ClearSelection();
+            dgv.CurrentCell = null;
+            cargando = false;
         }
 
-   
-        private void HabilitarCampos(bool habilitar)
+        private void Dgv_SelectionChanged(object sender, EventArgs e)
         {
-            txtNombre.Enabled = habilitar;
-            txtPresentacion.Enabled = habilitar;
-            cmbCategoria.Enabled = habilitar;
-            txtPrecioCompra.Enabled = habilitar;
-            txtPrecioVenta.Enabled = habilitar;
-            txtStockActual.Enabled = habilitar;
-            txtStockMinimo.Enabled = habilitar;
-            dtpFechaVencimiento.Enabled = habilitar;
+            if (cargando || dgv.SelectedRows.Count == 0) return;
+            if (!(dgv.SelectedRows[0].Tag is Medicamento m)) return;
 
-            btnGuardar.Enabled = habilitar;
-            btnCancelar.Enabled = habilitar;
+            idSeleccionado = m.IdMedicamento;
+            txtNombre.Text = m.Nombre;
+            txtPresentacion.Text = m.Presentacion;
+            txtPrecioCompra.Text = m.PrecioCompra.ToString("0.00");
+            txtPrecioVenta.Text = m.PrecioVenta.ToString("0.00");
+            txtStock.Text = m.StockActual.ToString();
+            txtStockMin.Text = m.StockMinimo.ToString();
+            dtpVence.Value = m.FechaVencimiento;
 
-            btnAgregar.Enabled = !habilitar;
-            btnEditar.Enabled = !habilitar;
-            btnEliminar.Enabled = !habilitar;
-            dgvMedicamentos.Enabled = !habilitar;
+            var cat = categorias.FirstOrDefault(c => c.NombreCategoria == m.Categoria);
+            if (cat != null) cboCategoria.SelectedValue = cat.IdCategoria;
+
+            lblModo.Text = "Editar medicamento";
+            btnEliminar.Enabled = true;
         }
 
-        private void LimpiarCampos()
+        private void Limpiar()
         {
+            idSeleccionado = 0;
             txtNombre.Clear();
             txtPresentacion.Clear();
             txtPrecioCompra.Clear();
             txtPrecioVenta.Clear();
-            txtStockActual.Clear();
-            txtStockMinimo.Clear();
-            dtpFechaVencimiento.Value = DateTime.Now;
-            if (cmbCategoria.Items.Count > 0)
-                cmbCategoria.SelectedIndex = 0;
-            idMedicamentoSeleccionado = 0;
-        }
-
-       
-        private bool ValidarFormato()
-        {
-            if (!decimal.TryParse(txtPrecioCompra.Text, out _))
-            {
-                MessageBox.Show("El precio de compra debe ser un número válido.", "Validación",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtPrecioCompra.Focus();
-                return false;
-            }
-
-            if (!decimal.TryParse(txtPrecioVenta.Text, out _))
-            {
-                MessageBox.Show("El precio de venta debe ser un número válido.", "Validación",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtPrecioVenta.Focus();
-                return false;
-            }
-
-            if (!int.TryParse(txtStockActual.Text, out _))
-            {
-                MessageBox.Show("El stock actual debe ser un número entero válido.", "Validación",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtStockActual.Focus();
-                return false;
-            }
-
-            if (!int.TryParse(txtStockMinimo.Text, out _))
-            {
-                MessageBox.Show("El stock mínimo debe ser un número entero válido.", "Validación",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtStockMinimo.Focus();
-                return false;
-            }
-
-            return true;
-        }
-
-       
-        private void btnAgregar_Click(object sender, EventArgs e)
-        {
-            idMedicamentoSeleccionado = 0;
-            LimpiarCampos();
-            HabilitarCampos(true);
+            txtStock.Clear();
+            txtStockMin.Clear();
+            dtpVence.Value = DateTime.Today.AddYears(1);
+            cboCategoria.SelectedIndex = categorias.Count > 0 ? 0 : -1;
+            lblModo.Text = "Nuevo medicamento";
+            btnEliminar.Enabled = false;
+            dgv.ClearSelection();
             txtNombre.Focus();
         }
 
-        private void btnEditar_Click(object sender, EventArgs e)
+        // =====================================================================
+        //  ACCIONES
+        // =====================================================================
+        private void BtnGuardar_Click(object sender, EventArgs e)
         {
-            if (dgvMedicamentos.CurrentRow == null || dgvMedicamentos.SelectedRows.Count == 0)
+            string nombre = txtNombre.Text.Trim();
+            if (nombre == "") { EstiloUI.Aviso("Ingrese el nombre del medicamento."); return; }
+            if (cboCategoria.SelectedValue == null) { EstiloUI.Aviso("Seleccione una categoría."); return; }
+
+            if (!decimal.TryParse(txtPrecioCompra.Text, out decimal precioCompra) || precioCompra < 0)
+            { EstiloUI.Aviso("El precio de compra no es válido."); return; }
+            if (!decimal.TryParse(txtPrecioVenta.Text, out decimal precioVenta) || precioVenta < 0)
+            { EstiloUI.Aviso("El precio de venta no es válido."); return; }
+            if (!int.TryParse(txtStock.Text, out int stock) || stock < 0)
+            { EstiloUI.Aviso("El stock actual debe ser un número entero mayor o igual a 0."); return; }
+            if (!int.TryParse(txtStockMin.Text, out int stockMin) || stockMin < 0)
+            { EstiloUI.Aviso("El stock mínimo debe ser un número entero mayor o igual a 0."); return; }
+
+            var m = new Medicamento
             {
-                MessageBox.Show("Seleccione un medicamento de la lista para editar.", "Aviso",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-       
-            Medicamento m = (Medicamento)dgvMedicamentos.SelectedRows[0].DataBoundItem;
-
-            idMedicamentoSeleccionado = m.IdMedicamento;
-            txtNombre.Text = m.Nombre;
-            txtPresentacion.Text = m.Presentacion;
-            txtPrecioCompra.Text = m.PrecioCompra.ToString();
-            txtPrecioVenta.Text = m.PrecioVenta.ToString();
-            txtStockActual.Text = m.StockActual.ToString();
-            txtStockMinimo.Text = m.StockMinimo.ToString();
-            dtpFechaVencimiento.Value = m.FechaVencimiento;
-            cmbCategoria.Text = m.Categoria;
-
-            HabilitarCampos(true);
-            txtNombre.Focus();
-        }
-
-        private void btnGuardar_Click(object sender, EventArgs e)
-        {
-            if (!ValidarFormato())
-                return;
-
-            Medicamento m = new Medicamento
-            {
-                IdMedicamento = idMedicamentoSeleccionado,
-                Nombre = txtNombre.Text.Trim(),
+                IdMedicamento = idSeleccionado,
+                Nombre = nombre,
                 Presentacion = txtPresentacion.Text.Trim(),
-                PrecioCompra = decimal.Parse(txtPrecioCompra.Text),
-                PrecioVenta = decimal.Parse(txtPrecioVenta.Text),
-                StockActual = int.Parse(txtStockActual.Text),
-                StockMinimo = int.Parse(txtStockMinimo.Text),
-                FechaVencimiento = dtpFechaVencimiento.Value.Date,
-                IdCategoria = Convert.ToInt32(cmbCategoria.SelectedValue),
+                IdCategoria = Convert.ToInt32(cboCategoria.SelectedValue),
+                PrecioCompra = precioCompra,
+                PrecioVenta = precioVenta,
+                StockActual = stock,
+                StockMinimo = stockMin,
+                FechaVencimiento = dtpVence.Value.Date
             };
 
             try
             {
-                negocio.Guardar(m); // aquí se validan las reglas de negocio y se guarda
+                if (idSeleccionado == 0) dao.Insertar(m);
+                else dao.Actualizar(m);
 
-                MessageBox.Show("Medicamento guardado correctamente.", "Éxito",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                LimpiarCampos();
-                HabilitarCampos(false);
-                CargarMedicamentos();
+                EstiloUI.Info(idSeleccionado == 0 ? "Medicamento registrado." : "Medicamento actualizado.");
+                CargarLista(txtBuscar.Text);
+                Limpiar();
             }
             catch (Exception ex)
             {
-                // Aquí llegan tanto errores de negocio (ej. "precio inválido")
-                // como errores de base de datos
-                MessageBox.Show(ex.Message, "No se pudo guardar",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                EstiloUI.Error("No se pudo guardar:\n" + ex.Message);
             }
         }
 
-       
-        private void btnEliminar_Click(object sender, EventArgs e)
+        private void BtnEliminar_Click(object sender, EventArgs e)
         {
-            if (dgvMedicamentos.CurrentRow == null || dgvMedicamentos.SelectedRows.Count == 0)
-            {
-                MessageBox.Show("Seleccione un medicamento de la lista para eliminar.", "Aviso",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            Medicamento m = (Medicamento)dgvMedicamentos.SelectedRows[0].DataBoundItem;
-
-            DialogResult resultado = MessageBox.Show(
-                $"¿Está seguro que desea eliminar el medicamento \"{m.Nombre}\"?",
-                "Confirmar eliminación",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
-
-            if (resultado != DialogResult.Yes)
-                return;
+            if (idSeleccionado == 0) { EstiloUI.Aviso("Seleccione un medicamento de la lista."); return; }
+            if (!EstiloUI.Confirmar("¿Eliminar el medicamento \"" + txtNombre.Text + "\"?")) return;
 
             try
             {
-                negocio.Eliminar(m.IdMedicamento);
-
-                MessageBox.Show("Medicamento eliminado correctamente.", "Éxito",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                CargarMedicamentos();
+                dao.Eliminar(idSeleccionado);
+                CargarLista(txtBuscar.Text);
+                Limpiar();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "No se pudo eliminar el medicamento.\n" +
-                    "Puede que tenga movimientos de entradas o salidas asociados.\n\n" + ex.Message,
-                    "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                EstiloUI.Error("No se pudo eliminar. Puede que tenga entradas o salidas registradas.\n\n" + ex.Message);
             }
-        }
-
-        
-        private void btnCancelar_Click(object sender, EventArgs e)
-        {
-            LimpiarCampos();
-            HabilitarCampos(false);
-        }
-
-       
-        private void txtBuscar_TextChanged(object sender, EventArgs e)
-        {
-            CargarMedicamentos(txtBuscar.Text.Trim());
-        }
-
-        private void btnVolver_Click(object sender, EventArgs e)
-        {
-            this.Close();
         }
     }
 }

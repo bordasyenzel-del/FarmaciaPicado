@@ -1,95 +1,107 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Windows.Forms;
-using FarmaciaPicado.Negocio;
+using Guna.UI2.WinForms;
+using FarmaciaPicado.AccesoDatos;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
 {
     public partial class FrmEntradas : Form
     {
-        private readonly EntradaNegocio negocio = new EntradaNegocio();
-        private int idUsuarioActivo;
+        private readonly EntradaDAO dao = new EntradaDAO();
+        private readonly int idUsuario;
+
+        private Guna2ComboBox cboMedicamento;
+        private Guna2TextBox txtCantidad;
+        private Guna2DataGridView dgv;
+        private Guna2Button btnRegistrar;
 
         public FrmEntradas(int idUsuario)
         {
             InitializeComponent();
-            this.idUsuarioActivo = idUsuario;
+            this.idUsuario = idUsuario;
+            ConstruirUI();
+            this.Load += (s, e) =>
+            {
+                try { CargarMedicamentos(); CargarLista(); }
+                catch (Exception ex) { EstiloUI.Error("Error al cargar los datos:\n" + ex.Message); }
+            };
         }
 
-        private void FrmEntradas_Load(object sender, EventArgs e)
+        private void ConstruirUI()
         {
-            CargarMedicamentos();
-            CargarHistorial();
+            var cuerpo = EstiloUI.ConfigurarForm(this, "Entradas", "Registro de medicamentos que ingresan al inventario", 1100, 640);
+            EstiloUI.DosColumnas(cuerpo, 360, out Guna2Panel izq, out Guna2Panel der);
+
+            // ---------- Formulario ----------
+            izq.Controls.Add(EstiloUI.TituloTarjeta("Registrar entrada"));
+
+            cboMedicamento = EstiloUI.Combo();
+            txtCantidad = EstiloUI.Caja("Cantidad que ingresa");
+            EstiloUI.Campo(izq, "Medicamento", cboMedicamento, 20, 56, 320);
+            EstiloUI.Campo(izq, "Cantidad", txtCantidad, 20, 118, 320);
+
+            btnRegistrar = EstiloUI.Boton("Registrar entrada", EstiloUI.Verde, 320);
+            btnRegistrar.Location = new Point(20, 200);
+            btnRegistrar.Click += BtnRegistrar_Click;
+            izq.Controls.Add(btnRegistrar);
+
+            // ---------- Historial ----------
+            der.Padding = new Padding(20, 56, 20, 20);
+            dgv = EstiloUI.CrearGrid();
+            dgv.Columns.Add("Fecha", "Fecha");
+            dgv.Columns.Add("Medicamento", "Medicamento");
+            dgv.Columns.Add("Cantidad", "Cantidad");
+            dgv.Columns.Add("Usuario", "Registrado por");
+            EstiloUI.DesactivarOrden(dgv);
+
+            der.Controls.Add(dgv);
+            der.Controls.Add(EstiloUI.TituloTarjeta("Historial de entradas"));
         }
 
         private void CargarMedicamentos()
         {
+            int? seleccionado = cboMedicamento.SelectedValue is int id ? id : (int?)null;
+
+            cboMedicamento.DataSource = null;
+            cboMedicamento.DisplayMember = "Nombre";
+            cboMedicamento.ValueMember = "IdMedicamento";
+            cboMedicamento.DataSource = dao.ObtenerMedicamentos();
+
+            if (seleccionado.HasValue) cboMedicamento.SelectedValue = seleccionado.Value;
+        }
+
+        private void CargarLista()
+        {
+            dgv.Rows.Clear();
+            foreach (Entrada en in dao.Obtener())
+            {
+                dgv.Rows.Add(en.FechaEntrada.ToString("dd/MM/yyyy HH:mm"), en.Medicamento, en.Cantidad, en.Usuario);
+            }
+            dgv.ClearSelection();
+            dgv.CurrentCell = null;
+        }
+
+        private void BtnRegistrar_Click(object sender, EventArgs e)
+        {
+            if (cboMedicamento.SelectedValue == null) { EstiloUI.Aviso("Seleccione un medicamento."); return; }
+            if (!int.TryParse(txtCantidad.Text, out int cantidad) || cantidad <= 0)
+            { EstiloUI.Aviso("La cantidad debe ser un número entero mayor que 0."); return; }
+
             try
             {
-                List<Medicamento> medicamentos = negocio.ObtenerMedicamentos();
-                cmbMedicamento.DataSource = medicamentos;
-                cmbMedicamento.DisplayMember = "Nombre";
-                cmbMedicamento.ValueMember = "IdMedicamento";
+                dao.Registrar(Convert.ToInt32(cboMedicamento.SelectedValue), cantidad, idUsuario);
+                EstiloUI.Info("Entrada registrada correctamente.");
+                txtCantidad.Clear();
+                CargarLista();
+                txtCantidad.Focus();
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Error al cargar medicamentos:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                EstiloUI.Error("No se pudo registrar la entrada:\n" + ex.Message);
             }
-        }
-
-        private void CargarHistorial()
-        {
-            try
-            {
-                List<Entrada> entradas = negocio.Obtener();
-                dgvEntradas.DataSource = entradas;
-
-                if (dgvEntradas.Columns["IdEntrada"] != null)
-                    dgvEntradas.Columns["IdEntrada"].Visible = false;
-                if (dgvEntradas.Columns["Medicamento"] != null)
-                    dgvEntradas.Columns["Medicamento"].HeaderText = "Medicamento";
-                if (dgvEntradas.Columns["Cantidad"] != null)
-                    dgvEntradas.Columns["Cantidad"].HeaderText = "Cantidad";
-                if (dgvEntradas.Columns["FechaEntrada"] != null)
-                    dgvEntradas.Columns["FechaEntrada"].HeaderText = "Fecha";
-                if (dgvEntradas.Columns["Usuario"] != null)
-                    dgvEntradas.Columns["Usuario"].HeaderText = "Registrado por";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar el historial:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void btnRegistrar_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                int idMedicamento = cmbMedicamento.SelectedValue != null
-                    ? Convert.ToInt32(cmbMedicamento.SelectedValue) : 0;
-                int cantidad = (int)nudCantidad.Value;
-
-                negocio.Registrar(idMedicamento, cantidad, idUsuarioActivo);
-
-                MessageBox.Show("Entrada registrada correctamente. Stock actualizado.", "Éxito",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                nudCantidad.Value = 1;
-                CargarHistorial();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, "No se pudo registrar",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-        }
-
-        private void btnVolver_Click(object sender, EventArgs e)
-        {
-            this.Close();
         }
     }
 }

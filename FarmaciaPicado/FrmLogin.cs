@@ -45,6 +45,7 @@ namespace FarmaciaPicado
                 // Aquí llegan tanto los mensajes de "campo vacío" (de Negocio)
                 // como errores reales de conexión a la base de datos
                 lblMensaje.Text = ex.Message;
+                //Oe sacrifiquemos al arioc :D
             }
         }
     }

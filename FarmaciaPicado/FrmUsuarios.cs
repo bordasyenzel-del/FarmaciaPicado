@@ -1,206 +1,203 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
-using FarmaciaPicado.Negocio;
+using Guna.UI2.WinForms;
+using FarmaciaPicado.AccesoDatos;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
 {
     public partial class FrmUsuarios : Form
     {
-        private readonly UsuarioNegocio negocio = new UsuarioNegocio();
-        private int idUsuarioSeleccionado = 0;
+        private readonly UsuarioDAO dao = new UsuarioDAO();
+        private List<Rol> roles = new List<Rol>();
+        private int idSeleccionado = 0;
+        private bool cargando = false;
+
+        private Label lblModo;
+        private Guna2TextBox txtUsuario, txtContrasena;
+        private Guna2ComboBox cboRol;
+        private Guna2CheckBox chkActivo;
+        private Guna2DataGridView dgv;
+        private Guna2Button btnGuardar, btnNuevo, btnEliminar;
 
         public FrmUsuarios()
         {
             InitializeComponent();
+            ConstruirUI();
+            this.Load += (s, e) =>
+            {
+                try { CargarRoles(); CargarLista(); Limpiar(); }
+                catch (Exception ex) { EstiloUI.Error("Error al cargar los datos:\n" + ex.Message); }
+            };
         }
 
-        private void FrmUsuarios_Load(object sender, EventArgs e)
+        private void ConstruirUI()
         {
-            CargarRoles();
-            CargarUsuarios();
-            HabilitarCampos(false);
+            var cuerpo = EstiloUI.ConfigurarForm(this, "Usuarios", "Administración de cuentas y roles de acceso", 1100, 660);
+            EstiloUI.DosColumnas(cuerpo, 380, out Guna2Panel izq, out Guna2Panel der);
+
+            // ---------- Formulario ----------
+            lblModo = EstiloUI.TituloTarjeta("Nuevo usuario");
+            izq.Controls.Add(lblModo);
+
+            txtUsuario = EstiloUI.Caja("Nombre de usuario");
+            txtContrasena = EstiloUI.Caja("Contraseña");
+            txtContrasena.UseSystemPasswordChar = true;
+            cboRol = EstiloUI.Combo();
+
+            EstiloUI.Campo(izq, "Usuario", txtUsuario, 20, 56, 340);
+            EstiloUI.Campo(izq, "Contraseña", txtContrasena, 20, 118, 340);
+            EstiloUI.Campo(izq, "Rol", cboRol, 20, 180, 340);
+
+            chkActivo = new Guna2CheckBox
+            {
+                Text = "Usuario activo",
+                Checked = true,
+                BackColor = Color.White,
+                ForeColor = EstiloUI.Texto,
+                Font = new Font("Segoe UI", 10F),
+                Location = new Point(20, 250),
+                AutoSize = true
+            };
+            izq.Controls.Add(chkActivo);
+
+            btnGuardar = EstiloUI.Boton("Guardar", EstiloUI.Azul, 340);
+            btnGuardar.Location = new Point(20, 300);
+            btnNuevo = EstiloUI.Boton("Nuevo", EstiloUI.TextoSuave, 165);
+            btnNuevo.Location = new Point(20, 350);
+            btnEliminar = EstiloUI.Boton("Eliminar", EstiloUI.Rojo, 165);
+            btnEliminar.Location = new Point(195, 350);
+
+            btnGuardar.Click += BtnGuardar_Click;
+            btnNuevo.Click += (s, e) => Limpiar();
+            btnEliminar.Click += BtnEliminar_Click;
+
+            izq.Controls.Add(btnGuardar);
+            izq.Controls.Add(btnNuevo);
+            izq.Controls.Add(btnEliminar);
+
+            // ---------- Listado ----------
+            der.Padding = new Padding(20, 56, 20, 20);
+            dgv = EstiloUI.CrearGrid();
+            dgv.Columns.Add("Usuario", "Usuario");
+            dgv.Columns.Add("Rol", "Rol");
+            dgv.Columns.Add("Estado", "Estado");
+            EstiloUI.DesactivarOrden(dgv);
+            dgv.SelectionChanged += Dgv_SelectionChanged;
+
+            der.Controls.Add(dgv);
+            der.Controls.Add(EstiloUI.TituloTarjeta("Usuarios registrados"));
         }
 
         private void CargarRoles()
         {
-            try
-            {
-                List<Rol> roles = negocio.ObtenerRoles();
-                cmbRol.DataSource = roles;
-                cmbRol.DisplayMember = "NombreRol";
-                cmbRol.ValueMember = "IdRol";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar roles:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            roles = dao.ObtenerRoles();
+            cboRol.DataSource = null;
+            cboRol.DisplayMember = "NombreRol";
+            cboRol.ValueMember = "IdRol";
+            cboRol.DataSource = roles;
         }
 
-        private void CargarUsuarios()
+        private void CargarLista()
         {
-            try
+            cargando = true;
+            dgv.Rows.Clear();
+            foreach (Usuario u in dao.Obtener())
             {
-                List<Usuario> usuarios = negocio.Obtener();
-                dgvUsuarios.DataSource = usuarios;
-
-                if (dgvUsuarios.Columns["IdUsuario"] != null)
-                    dgvUsuarios.Columns["IdUsuario"].Visible = false;
-                if (dgvUsuarios.Columns["Contrasena"] != null)
-                    dgvUsuarios.Columns["Contrasena"].Visible = false;
-                if (dgvUsuarios.Columns["IdRol"] != null)
-                    dgvUsuarios.Columns["IdRol"].Visible = false;
-
-                if (dgvUsuarios.Columns["NombreUsuario"] != null)
-                    dgvUsuarios.Columns["NombreUsuario"].HeaderText = "Usuario";
-                if (dgvUsuarios.Columns["Rol"] != null)
-                    dgvUsuarios.Columns["Rol"].HeaderText = "Rol";
-                if (dgvUsuarios.Columns["Activo"] != null)
-                    dgvUsuarios.Columns["Activo"].HeaderText = "Activo";
-
-                dgvUsuarios.MultiSelect = false;
-                dgvUsuarios.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+                int i = dgv.Rows.Add(u.NombreUsuario, u.Rol, u.Activo ? "Activo" : "Inactivo");
+                var fila = dgv.Rows[i];
+                fila.Tag = u;
+                fila.Cells["Estado"].Style.ForeColor = u.Activo ? EstiloUI.Verde : EstiloUI.Rojo;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Error al cargar usuarios:\n" + ex.Message, "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            dgv.ClearSelection();
+            dgv.CurrentCell = null;
+            cargando = false;
         }
 
-        private void HabilitarCampos(bool habilitar)
+        private void Dgv_SelectionChanged(object sender, EventArgs e)
         {
-            txtNombreUsuario.Enabled = habilitar;
-            txtContraseñaUsuario.Enabled = habilitar;
-            cmbRol.Enabled = habilitar;
-            chkActivo.Enabled = habilitar;
+            if (cargando || dgv.SelectedRows.Count == 0) return;
+            if (!(dgv.SelectedRows[0].Tag is Usuario u)) return;
 
-            btnGuardar.Enabled = habilitar;
-            btnCancelar.Enabled = habilitar;
-
-            btnAgregar.Enabled = !habilitar;
-            btnEditar.Enabled = !habilitar;
-            btnEliminar.Enabled = !habilitar;
-            dgvUsuarios.Enabled = !habilitar;
-        }
-
-        private void LimpiarCampos()
-        {
-            txtNombreUsuario.Clear();
-            txtContraseñaUsuario.Clear();
-            if (cmbRol.Items.Count > 0)
-                cmbRol.SelectedIndex = 0;
-            chkActivo.Checked = true;
-            idUsuarioSeleccionado = 0;
-        }
-
-        private void btnAgregar_Click(object sender, EventArgs e)
-        {
-            idUsuarioSeleccionado = 0;
-            LimpiarCampos();
-            HabilitarCampos(true);
-            txtNombreUsuario.Focus();
-        }
-
-        private void btnEditar_Click(object sender, EventArgs e)
-        {
-            if (dgvUsuarios.CurrentRow == null || dgvUsuarios.SelectedRows.Count == 0)
-            {
-                MessageBox.Show("Seleccione un usuario de la lista para editar.", "Aviso",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            Usuario u = (Usuario)dgvUsuarios.SelectedRows[0].DataBoundItem;
-
-            idUsuarioSeleccionado = u.IdUsuario;
-            txtNombreUsuario.Text = u.NombreUsuario;
-            txtContraseñaUsuario.Text = ""; // nunca se muestra la contraseña actual
-            cmbRol.Text = u.Rol;
+            idSeleccionado = u.IdUsuario;
+            txtUsuario.Text = u.NombreUsuario;
+            txtContrasena.Clear();
+            txtContrasena.PlaceholderText = "Dejar vacío para no cambiarla";
             chkActivo.Checked = u.Activo;
 
-            HabilitarCampos(true);
-            txtNombreUsuario.Focus();
+            var rol = roles.FirstOrDefault(r => r.NombreRol == u.Rol);
+            if (rol != null) cboRol.SelectedValue = rol.IdRol;
+
+            lblModo.Text = "Editar usuario";
+            btnEliminar.Enabled = true;
         }
 
-        private void btnGuardar_Click(object sender, EventArgs e)
+        private void Limpiar()
         {
-            Usuario u = new Usuario
+            idSeleccionado = 0;
+            txtUsuario.Clear();
+            txtContrasena.Clear();
+            txtContrasena.PlaceholderText = "Contraseña";
+            cboRol.SelectedIndex = roles.Count > 0 ? 0 : -1;
+            chkActivo.Checked = true;
+            lblModo.Text = "Nuevo usuario";
+            btnEliminar.Enabled = false;
+            dgv.ClearSelection();
+            txtUsuario.Focus();
+        }
+
+        private void BtnGuardar_Click(object sender, EventArgs e)
+        {
+            string nombre = txtUsuario.Text.Trim();
+            string contrasena = txtContrasena.Text;
+
+            if (nombre == "") { EstiloUI.Aviso("Ingrese el nombre de usuario."); return; }
+            if (cboRol.SelectedValue == null) { EstiloUI.Aviso("Seleccione un rol."); return; }
+            if (idSeleccionado == 0 && contrasena == "") { EstiloUI.Aviso("Ingrese una contraseña para el nuevo usuario."); return; }
+
+            var u = new Usuario
             {
-                IdUsuario = idUsuarioSeleccionado,
-                NombreUsuario = txtNombreUsuario.Text.Trim(),
-                IdRol = Convert.ToInt32(cmbRol.SelectedValue),
-                Activo = chkActivo.Checked,
+                IdUsuario = idSeleccionado,
+                NombreUsuario = nombre,
+                Contrasena = contrasena,
+                IdRol = Convert.ToInt32(cboRol.SelectedValue),
+                Activo = chkActivo.Checked
             };
 
             try
             {
-                negocio.Guardar(u, txtContraseñaUsuario.Text);
+                if (idSeleccionado == 0) dao.Insertar(u);
+                else if (contrasena == "") dao.ActualizarSinContrasena(u);
+                else dao.ActualizarConContrasena(u);
 
-                MessageBox.Show("Usuario guardado correctamente.", "Éxito",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                LimpiarCampos();
-                HabilitarCampos(false);
-                CargarUsuarios();
+                EstiloUI.Info(idSeleccionado == 0 ? "Usuario creado." : "Usuario actualizado.");
+                CargarLista();
+                Limpiar();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, "No se pudo guardar",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                EstiloUI.Error("No se pudo guardar:\n" + ex.Message);
             }
         }
 
-        private void btnEliminar_Click(object sender, EventArgs e)
+        private void BtnEliminar_Click(object sender, EventArgs e)
         {
-            if (dgvUsuarios.CurrentRow == null || dgvUsuarios.SelectedRows.Count == 0)
-            {
-                MessageBox.Show("Seleccione un usuario de la lista para eliminar.", "Aviso",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            Usuario u = (Usuario)dgvUsuarios.SelectedRows[0].DataBoundItem;
-
-            DialogResult resultado = MessageBox.Show(
-                $"¿Está seguro que desea eliminar al usuario \"{u.NombreUsuario}\"?",
-                "Confirmar eliminación",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
-
-            if (resultado != DialogResult.Yes)
-                return;
+            if (idSeleccionado == 0) { EstiloUI.Aviso("Seleccione un usuario de la lista."); return; }
+            if (!EstiloUI.Confirmar("¿Eliminar al usuario \"" + txtUsuario.Text + "\"?")) return;
 
             try
             {
-                negocio.Eliminar(u.IdUsuario);
-
-                MessageBox.Show("Usuario eliminado correctamente.", "Éxito",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                CargarUsuarios();
+                dao.Eliminar(idSeleccionado);
+                CargarLista();
+                Limpiar();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "No se pudo eliminar el usuario.\n" +
-                    "Puede que tenga movimientos de entradas o salidas asociados.\n\n" + ex.Message,
-                    "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                EstiloUI.Error("No se pudo eliminar. Puede que tenga movimientos registrados; en ese caso desactívalo en vez de eliminarlo.\n\n" + ex.Message);
             }
-        }
-
-        private void btnCancelar_Click(object sender, EventArgs e)
-        {
-            LimpiarCampos();
-            HabilitarCampos(false);
-        }
-
-        private void btnVolver_Click(object sender, EventArgs e)
-        {
-            this.Close();
         }
     }
 }
