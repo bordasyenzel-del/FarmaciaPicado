@@ -26,6 +26,9 @@ namespace FarmaciaPicado
         private static readonly Color ColorTexto = Color.FromArgb(31, 41, 55);
         private static readonly Color ColorTextoSuave = Color.FromArgb(107, 114, 128);
 
+        // Program.cs lo lee al cerrarse el menú para saber si debe mostrar el login otra vez
+        public bool CerroSesion { get; private set; }
+
         // ---- Datos de sesión ----
         private readonly int idUsuario;
         private readonly string nombreUsuario;
@@ -159,7 +162,7 @@ namespace FarmaciaPicado
             btnCategorias.Click += (s, e) => new FrmCategorias().ShowDialog();
             btnEntradas.Click += (s, e) => { new FrmEntradas(idUsuario).ShowDialog(); CargarResumen(); };
             btnSalidas.Click += (s, e) => { new FrmSalidas(idUsuario).ShowDialog(); CargarResumen(); };
-            btnUsuarios.Click += (s, e) => new FrmUsuarios().ShowDialog();
+            btnUsuarios.Click += (s, e) => new FrmUsuarios(idUsuario).ShowDialog();
             btnReportes.Click += (s, e) => new FrmReportes().ShowDialog();
 
             navPanel.Controls.Add(btnMedicamentos);
@@ -211,7 +214,7 @@ namespace FarmaciaPicado
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (resultado == DialogResult.Yes)
             {
-                new FrmLogin().Show();
+                CerroSesion = true;
                 this.Close();
             }
         }
@@ -455,7 +458,7 @@ namespace FarmaciaPicado
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
             grid.Controls.Add(CrearBotonAccion("Reportes", ColorAzul, (s, e) => new FrmReportes().ShowDialog()), 0, 0);
-            grid.Controls.Add(CrearBotonAccion("Usuarios", ColorMorado, (s, e) => new FrmUsuarios().ShowDialog()), 1, 0);
+            grid.Controls.Add(CrearBotonAccion("Usuarios", ColorMorado, (s, e) => new FrmUsuarios(idUsuario).ShowDialog()), 1, 0);
             grid.Controls.Add(CrearBotonAccion("Salidas", ColorVerde, (s, e) => { new FrmSalidas(idUsuario).ShowDialog(); CargarResumen(); }), 0, 1);
             grid.Controls.Add(CrearBotonAccion("Entradas", ColorNaranja, (s, e) => { new FrmEntradas(idUsuario).ShowDialog(); CargarResumen(); }), 1, 1);
 
