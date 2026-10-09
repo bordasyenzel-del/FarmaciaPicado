@@ -4,8 +4,7 @@ using FarmaciaPicado.AccesoDatos;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado.Negocio
-{
-    //sacrificamos al compañero Jalmar para escribir esto
+
     public class MedicamentoNegocio
     {
         private readonly MedicamentoDAO dao = new MedicamentoDAO();
