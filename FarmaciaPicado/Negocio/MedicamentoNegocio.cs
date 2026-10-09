@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using FarmaciaPicado.AccesoDatos;
 using FarmaciaPicado.Entidades;
 
-namespace FarmaciaPicado.Negocio
+namespace FarmaciaPicado.Negocio { 
 
     public class MedicamentoNegocio
     {
