@@ -7,8 +7,10 @@ using System.Windows.Forms.DataVisualization.Charting;
 using Guna.UI2.WinForms;
 using FarmaciaPicado.AccesoDatos;
 using FarmaciaPicado.Entidades;
+using FarmaciaPicado.Orm;
 
-//Antes de tocar algo aqui han de rezar un padre nuestro y un ave maria, porque este codigo es un caos y no se entiende nada, pero funciona.
+//ANTES DE TOCAR ESTE MENÚ SE RECOMIENDA REZAR 2 PADRES NUESTROS Y 5 AVES MARIAS PORQUE SOLO DIOS SABE COMO FUNCIONA
+
 
 namespace FarmaciaPicado
 {
@@ -26,17 +28,19 @@ namespace FarmaciaPicado
         private static readonly Color ColorTexto = Color.FromArgb(31, 41, 55);
         private static readonly Color ColorTextoSuave = Color.FromArgb(107, 114, 128);
 
-        // Program.cs lo lee al cerrarse el menú para saber si debe mostrar el login otra vez
-        public bool CerroSesion { get; private set; }
-
         // ---- Datos de sesión ----
         private readonly int idUsuario;
         private readonly string nombreUsuario;
         private readonly string rol;
 
+        // Indica si el usuario ha pulsado "Cerrar sesión" para volver al login.
+        public bool CerroSesion { get; private set; } = false;
+
         // ---- DAOs ----
         private readonly MedicamentoDAO medicamentoDAO = new MedicamentoDAO();
         private readonly ReporteDAO reporteDAO = new ReporteDAO();
+        private readonly ReporteServicioEf reportesEf = new ReporteServicioEf();
+        private bool alertaVencimientoMostrada = false;
 
         // ---- Controles que se actualizan dinámicamente ----
         private Label lblValorTotal;
@@ -162,7 +166,7 @@ namespace FarmaciaPicado
             btnCategorias.Click += (s, e) => new FrmCategorias().ShowDialog();
             btnEntradas.Click += (s, e) => { new FrmEntradas(idUsuario).ShowDialog(); CargarResumen(); };
             btnSalidas.Click += (s, e) => { new FrmSalidas(idUsuario).ShowDialog(); CargarResumen(); };
-            btnUsuarios.Click += (s, e) => new FrmUsuarios(idUsuario).ShowDialog();
+            btnUsuarios.Click += (s, e) => new FrmUsuarios().ShowDialog();
             btnReportes.Click += (s, e) => new FrmReportes().ShowDialog();
 
             navPanel.Controls.Add(btnMedicamentos);
@@ -214,7 +218,10 @@ namespace FarmaciaPicado
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (resultado == DialogResult.Yes)
             {
-                CerroSesion = true;
+                // Señalamos que el usuario ha cerrado sesión para que el bucle en Program.Main
+                // vuelva a mostrar el formulario de login en lugar de terminar la aplicación.
+                this.CerroSesion = true;
+                new FrmLogin().Show();
                 this.Close();
             }
         }
@@ -458,7 +465,7 @@ namespace FarmaciaPicado
             grid.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
             grid.Controls.Add(CrearBotonAccion("Reportes", ColorAzul, (s, e) => new FrmReportes().ShowDialog()), 0, 0);
-            grid.Controls.Add(CrearBotonAccion("Usuarios", ColorMorado, (s, e) => new FrmUsuarios(idUsuario).ShowDialog()), 1, 0);
+            grid.Controls.Add(CrearBotonAccion("Usuarios", ColorMorado, (s, e) => new FrmUsuarios().ShowDialog()), 1, 0);
             grid.Controls.Add(CrearBotonAccion("Salidas", ColorVerde, (s, e) => { new FrmSalidas(idUsuario).ShowDialog(); CargarResumen(); }), 0, 1);
             grid.Controls.Add(CrearBotonAccion("Entradas", ColorNaranja, (s, e) => { new FrmEntradas(idUsuario).ShowDialog(); CargarResumen(); }), 1, 1);
 
@@ -523,16 +530,18 @@ namespace FarmaciaPicado
         }
 
         // =====================================================================
-        //  CARGA DE DATOS (usa DAOs reales)
+        //  CARGA DE DATOS (usa tus DAOs reales)
         // =====================================================================
         private void CargarResumen()
         {
+            var proximosVencer = new List<Medicamento>();
+
             try
             {
                 CargarStock("");
 
                 var stockBajo = reporteDAO.ObtenerStockBajo();
-                var proximosVencer = reporteDAO.ObtenerProximosVencer();
+                proximosVencer = reporteDAO.ObtenerProximosVencer();
                 var historial = reporteDAO.ObtenerHistorial();
 
                 lblValorTotal.Text = medicamentoDAO.Obtener().Count.ToString();
@@ -540,13 +549,19 @@ namespace FarmaciaPicado
                 lblValorProximos.Text = proximosVencer.Count.ToString();
 
                 CargarRecientes(historial);
-                CargarGrafica(historial);
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Error al cargar el resumen:\n" + ex.Message, "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+
+            // La gráfica se carga aparte: si algo falla arriba, igual se intenta dibujar
+            CargarGrafica();
+
+            // La alerta se muestra cuando el formulario ya está visible
+            var lista = proximosVencer;
+            this.BeginInvoke((Action)(() => MostrarAlertaVencimientos(lista)));
         }
 
         private void CargarStock(string filtro)
@@ -554,9 +569,17 @@ namespace FarmaciaPicado
             dgvStock.Rows.Clear();
             foreach (Medicamento m in medicamentoDAO.Obtener(filtro ?? ""))
             {
-                string estado = m.StockActual > 0 ? "Disponible" : "Agotado";
+                int dias = (m.FechaVencimiento.Date - DateTime.Today).Days;
+                string estado = dias < 0 ? "Vencido"
+                              : m.StockActual <= 0 ? "Agotado"
+                              : dias <= 30 ? "Por vencer"
+                              : "Disponible";
+                Color colorEstado = (dias < 0 || m.StockActual <= 0) ? ColorRojo
+                                  : dias <= 30 ? ColorNaranja
+                                  : ColorVerde;
+
                 int idx = dgvStock.Rows.Add(m.Nombre, m.Categoria, m.StockActual, m.PrecioVenta.ToString("C2"), estado);
-                dgvStock.Rows[idx].Cells["Estado"].Style.ForeColor = m.StockActual > 0 ? ColorVerde : ColorRojo;
+                dgvStock.Rows[idx].Cells["Estado"].Style.ForeColor = colorEstado;
             }
             dgvStock.ClearSelection();
         }
@@ -572,32 +595,67 @@ namespace FarmaciaPicado
             dgvRecientes.ClearSelection();
         }
 
-        private void CargarGrafica(List<HistorialMovimiento> historial)
+        // Avisa una sola vez por sesión si hay medicamentos vencidos o por vencer (30 días)
+        private void MostrarAlertaVencimientos(List<Medicamento> lista)
+        {
+            if (alertaVencimientoMostrada || lista == null || lista.Count == 0) return;
+            alertaVencimientoMostrada = true;
+
+            int vencidos = lista.Count(m => m.FechaVencimiento.Date < DateTime.Today);
+            int porVencer = lista.Count - vencidos;
+
+            MessageBox.Show(
+                "Atención:\n\n• Medicamentos vencidos: " + vencidos +
+                "\n• Vencen en los próximos 30 días: " + porVencer +
+                "\n\nRevise el reporte «Próximos a vencer».",
+                "Alerta de vencimientos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        // Gráfica de los últimos 7 días (consulta LINQ con EF Core)
+        private void CargarGrafica()
         {
             chartMovimientos.Series.Clear();
+            chartMovimientos.Titles.Clear();
 
-            var serieEntradas = new Series("Entradas") { ChartType = SeriesChartType.Line, Color = ColorAzul, BorderWidth = 3, IsXValueIndexed = true };
-            var serieSalidas = new Series("Salidas") { ChartType = SeriesChartType.Line, Color = ColorRojo, BorderWidth = 3, IsXValueIndexed = true };
-
-            string[] dias = { "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom" };
-            var entradasPorDia = new int[7];
-            var salidasPorDia = new int[7];
-
-            foreach (var mov in historial)
+            try
             {
-                int diaIdx = ((int)mov.Fecha.DayOfWeek + 6) % 7; // lunes = 0
-                if (mov.Tipo == "Entrada") entradasPorDia[diaIdx] += mov.Cantidad;
-                else salidasPorDia[diaIdx] += mov.Cantidad;
-            }
+                var datos = reportesEf.MovimientosPorDia(7);
+                var cultura = new System.Globalization.CultureInfo("es-ES");
 
-            for (int i = 0; i < 7; i++)
+                var serieEntradas = new Series("Entradas")
+                {
+                    ChartType = SeriesChartType.Line,
+                    Color = ColorAzul,
+                    BorderWidth = 3,
+                    MarkerStyle = MarkerStyle.Circle,
+                    MarkerSize = 7,
+                    IsXValueIndexed = true
+                };
+                var serieSalidas = new Series("Salidas")
+                {
+                    ChartType = SeriesChartType.Line,
+                    Color = ColorRojo,
+                    BorderWidth = 3,
+                    MarkerStyle = MarkerStyle.Circle,
+                    MarkerSize = 7,
+                    IsXValueIndexed = true
+                };
+
+                foreach (var d in datos)
+                {
+                    string etiqueta = d.Dia.ToString("ddd dd", cultura);
+                    serieEntradas.Points.AddXY(etiqueta, d.Entradas);
+                    serieSalidas.Points.AddXY(etiqueta, d.Salidas);
+                }
+
+                chartMovimientos.Series.Add(serieEntradas);
+                chartMovimientos.Series.Add(serieSalidas);
+            }
+            catch (Exception ex)
             {
-                serieEntradas.Points.AddXY(dias[i], entradasPorDia[i]);
-                serieSalidas.Points.AddXY(dias[i], salidasPorDia[i]);
+                // Si falla, el motivo queda visible en la propia gráfica
+                chartMovimientos.Titles.Add(new Title("No se pudo cargar la gráfica: " + ex.Message) { ForeColor = ColorRojo });
             }
-
-            chartMovimientos.Series.Add(serieEntradas);
-            chartMovimientos.Series.Add(serieSalidas);
         }
     }
 }

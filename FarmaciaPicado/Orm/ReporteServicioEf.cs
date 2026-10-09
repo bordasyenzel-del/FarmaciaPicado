@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 
 namespace FarmaciaPicado.Orm
@@ -43,15 +45,23 @@ namespace FarmaciaPicado.Orm
         public decimal ValorVenta { get; set; }
     }
 
+    public class MovimientoDiaReporte
+    {
+        public DateTime Dia { get; set; }
+        public int Entradas { get; set; }
+        public int Salidas { get; set; }
+    }
+
     // =====================================================================
     //  REPORTES DINÁMICOS con LINQ sobre el DbContext.
-    //  Cada método arma la consulta paso a paso según los filtros que
-    //  elija el usuario, y EF Core la traduce a un único SELECT en SQL.
+    //  Los métodos terminados en "Async" aceptan un CancellationToken: si el
+    //  usuario pulsa «Cancelar» en la ventana de carga, EF Core cancela la
+    //  consulta en SQL Server.
     // =====================================================================
     public class ReporteServicioEf
     {
         // Medicamentos con stock igual o menor al mínimo (filtro opcional por categoría)
-        public List<StockReporte> StockBajo(int idCategoria = 0)
+        public async Task<List<StockReporte>> StockBajoAsync(int idCategoria, CancellationToken ct)
         {
             using (var db = new FarmaciaContext())
             {
@@ -62,7 +72,7 @@ namespace FarmaciaPicado.Orm
                 if (idCategoria > 0)
                     consulta = consulta.Where(m => m.IdCategoria == idCategoria);
 
-                return consulta
+                return await consulta
                     .OrderBy(m => m.StockActual)
                     .ThenBy(m => m.Nombre)
                     .Select(m => new StockReporte
@@ -74,12 +84,12 @@ namespace FarmaciaPicado.Orm
                         StockMinimo = m.StockMinimo,
                         FechaVencimiento = m.FechaVencimiento
                     })
-                    .ToList();
+                    .ToListAsync(ct);
             }
         }
 
         // Medicamentos vencidos o que vencen dentro de N días
-        public List<StockReporte> ProximosVencer(int dias = 30, int idCategoria = 0)
+        public async Task<List<StockReporte>> ProximosVencerAsync(int dias, int idCategoria, CancellationToken ct)
         {
             using (var db = new FarmaciaContext())
             {
@@ -92,7 +102,7 @@ namespace FarmaciaPicado.Orm
                 if (idCategoria > 0)
                     consulta = consulta.Where(m => m.IdCategoria == idCategoria);
 
-                return consulta
+                return await consulta
                     .OrderBy(m => m.FechaVencimiento)
                     .Select(m => new StockReporte
                     {
@@ -103,13 +113,13 @@ namespace FarmaciaPicado.Orm
                         StockMinimo = m.StockMinimo,
                         FechaVencimiento = m.FechaVencimiento
                     })
-                    .ToList();
+                    .ToListAsync(ct);
             }
         }
 
         // Historial de movimientos (entradas + salidas) filtrado por fechas, tipo y medicamento.
         // tipo: "Todos", "Entrada" o "Salida"
-        public List<MovimientoReporte> Movimientos(DateTime desde, DateTime hasta, string tipo = "Todos", string texto = "")
+        public async Task<List<MovimientoReporte>> MovimientosAsync(DateTime desde, DateTime hasta, string tipo, string texto, CancellationToken ct)
         {
             using (var db = new FarmaciaContext())
             {
@@ -155,12 +165,12 @@ namespace FarmaciaPicado.Orm
                     consulta = consulta == null ? consultaSalidas : consulta.Concat(consultaSalidas);
                 }
 
-                return consulta.OrderByDescending(m => m.Fecha).ToList();
+                return await consulta.OrderByDescending(m => m.Fecha).ToListAsync(ct);
             }
         }
 
-        // Rotación: cuántas unidades entraron y salieron de cada medicamento en un rango de fechas
-        public List<RotacionReporte> Rotacion(DateTime desde, DateTime hasta, int idCategoria = 0)
+        // Rotación: unidades que entraron y salieron de cada medicamento en un rango de fechas
+        public async Task<List<RotacionReporte>> RotacionAsync(DateTime desde, DateTime hasta, int idCategoria, CancellationToken ct)
         {
             using (var db = new FarmaciaContext())
             {
@@ -172,7 +182,7 @@ namespace FarmaciaPicado.Orm
                 if (idCategoria > 0)
                     consulta = consulta.Where(m => m.IdCategoria == idCategoria);
 
-                return consulta
+                return await consulta
                     .Select(m => new RotacionReporte
                     {
                         Medicamento = m.Nombre,
@@ -187,16 +197,16 @@ namespace FarmaciaPicado.Orm
                     })
                     .OrderByDescending(r => r.Salidas)
                     .ThenBy(r => r.Medicamento)
-                    .ToList();
+                    .ToListAsync(ct);
             }
         }
 
         // Valor del inventario agrupado por categoría (agregaciones con LINQ)
-        public List<InventarioCategoriaReporte> InventarioPorCategoria()
+        public async Task<List<InventarioCategoriaReporte>> InventarioPorCategoriaAsync(CancellationToken ct)
         {
             using (var db = new FarmaciaContext())
             {
-                return db.Categorias
+                return await db.Categorias
                     .AsNoTracking()
                     .Select(c => new InventarioCategoriaReporte
                     {
@@ -207,7 +217,43 @@ namespace FarmaciaPicado.Orm
                         ValorVenta = c.Medicamentos.Sum(m => (decimal?)(m.StockActual * m.PrecioVenta)) ?? 0m
                     })
                     .OrderBy(x => x.Categoria)
+                    .ToListAsync(ct);
+            }
+        }
+
+        // Para la gráfica del menú principal: entradas y salidas de los últimos N días
+        // (incluye los días sin movimientos, con valor 0).
+        public List<MovimientoDiaReporte> MovimientosPorDia(int dias)
+        {
+            using (var db = new FarmaciaContext())
+            {
+                DateTime inicio = DateTime.Today.AddDays(-(dias - 1));
+                DateTime fin = DateTime.Today.AddDays(1);
+
+                var entradas = db.Entradas.AsNoTracking()
+                    .Where(e => e.FechaEntrada >= inicio && e.FechaEntrada < fin)
+                    .GroupBy(e => e.FechaEntrada.Date)
+                    .Select(g => new { Dia = g.Key, Total = g.Sum(x => x.Cantidad) })
                     .ToList();
+
+                var salidas = db.Salidas.AsNoTracking()
+                    .Where(s => s.FechaSalida >= inicio && s.FechaSalida < fin)
+                    .GroupBy(s => s.FechaSalida.Date)
+                    .Select(g => new { Dia = g.Key, Total = g.Sum(x => x.Cantidad) })
+                    .ToList();
+
+                var resultado = new List<MovimientoDiaReporte>();
+                for (int i = 0; i < dias; i++)
+                {
+                    DateTime dia = inicio.AddDays(i);
+                    resultado.Add(new MovimientoDiaReporte
+                    {
+                        Dia = dia,
+                        Entradas = entradas.Where(x => x.Dia == dia).Sum(x => x.Total),
+                        Salidas = salidas.Where(x => x.Dia == dia).Sum(x => x.Total)
+                    });
+                }
+                return resultado;
             }
         }
     }

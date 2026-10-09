@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using Guna.UI2.WinForms;
 using FarmaciaPicado.AccesoDatos;
+using FarmaciaPicado.Orm;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
@@ -82,7 +83,7 @@ namespace FarmaciaPicado
             cboMedicamento.DataSource = null;
             cboMedicamento.DisplayMember = "Nombre";
             cboMedicamento.ValueMember = "IdMedicamento";
-            cboMedicamento.DataSource = dao.ObtenerMedicamentos();
+            cboMedicamento.DataSource = new MedicamentoServicioEf().Obtener(); // incluye la fecha de vencimiento
 
             if (seleccionado.HasValue) cboMedicamento.SelectedValue = seleccionado.Value;
             ActualizarStock();
@@ -92,8 +93,12 @@ namespace FarmaciaPicado
         {
             if (cboMedicamento.SelectedItem is Medicamento m)
             {
-                lblStock.Text = "Stock disponible: " + m.StockActual;
-                lblStock.ForeColor = m.StockActual > 0 ? EstiloUI.Verde : EstiloUI.Rojo;
+                int dias = (m.FechaVencimiento.Date - DateTime.Today).Days;
+                string vence = dias < 0 ? "  |  VENCIDO" : dias <= 30 ? "  |  Vence en " + dias + " día(s)" : "";
+                lblStock.Text = "Stock disponible: " + m.StockActual + vence;
+                lblStock.ForeColor = (m.StockActual <= 0 || dias < 0) ? EstiloUI.Rojo
+                                   : dias <= 30 ? EstiloUI.Naranja
+                                   : EstiloUI.Verde;
             }
             else
             {
@@ -119,6 +124,16 @@ namespace FarmaciaPicado
             { EstiloUI.Aviso("La cantidad debe ser un número entero mayor que 0."); return; }
             if (cantidad > m.StockActual)
             { EstiloUI.Aviso("No hay stock suficiente. Disponible: " + m.StockActual); return; }
+
+            // Validaciones de vencimiento
+            int diasVence = (m.FechaVencimiento.Date - DateTime.Today).Days;
+            if (diasVence < 0)
+            {
+                EstiloUI.Aviso("No se puede dar salida a \"" + m.Nombre + "\": venció el " + m.FechaVencimiento.ToString("dd/MM/yyyy") + ".");
+                return;
+            }
+            if (diasVence <= 30 && !EstiloUI.Confirmar("\"" + m.Nombre + "\" vence en " + diasVence + " día(s).\n\n¿Registrar la salida de todos modos?"))
+                return;
 
             try
             {

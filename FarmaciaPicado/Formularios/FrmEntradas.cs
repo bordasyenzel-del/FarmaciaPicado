@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using Guna.UI2.WinForms;
 using FarmaciaPicado.AccesoDatos;
+using FarmaciaPicado.Orm;
 using FarmaciaPicado.Entidades;
 
 namespace FarmaciaPicado
@@ -68,7 +69,7 @@ namespace FarmaciaPicado
             cboMedicamento.DataSource = null;
             cboMedicamento.DisplayMember = "Nombre";
             cboMedicamento.ValueMember = "IdMedicamento";
-            cboMedicamento.DataSource = dao.ObtenerMedicamentos();
+            cboMedicamento.DataSource = new MedicamentoServicioEf().Obtener(); // incluye la fecha de vencimiento
 
             if (seleccionado.HasValue) cboMedicamento.SelectedValue = seleccionado.Value;
         }
@@ -89,6 +90,20 @@ namespace FarmaciaPicado
             if (cboMedicamento.SelectedValue == null) { EstiloUI.Aviso("Seleccione un medicamento."); return; }
             if (!int.TryParse(txtCantidad.Text, out int cantidad) || cantidad <= 0)
             { EstiloUI.Aviso("La cantidad debe ser un número entero mayor que 0."); return; }
+
+            // Validaciones de vencimiento
+            if (cboMedicamento.SelectedItem is Medicamento med)
+            {
+                int diasVence = (med.FechaVencimiento.Date - DateTime.Today).Days;
+                if (diasVence < 0)
+                {
+                    EstiloUI.Aviso("\"" + med.Nombre + "\" está vencido (" + med.FechaVencimiento.ToString("dd/MM/yyyy") + ").\n" +
+                                   "Actualice su fecha de vencimiento en Medicamentos antes de registrar una entrada.");
+                    return;
+                }
+                if (diasVence <= 30 && !EstiloUI.Confirmar("\"" + med.Nombre + "\" vence en " + diasVence + " día(s).\n\n¿Registrar la entrada de todos modos?"))
+                    return;
+            }
 
             try
             {

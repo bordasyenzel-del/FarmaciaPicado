@@ -202,6 +202,23 @@ namespace FarmaciaPicado
             if (!int.TryParse(txtStockMin.Text, out int stockMin) || stockMin < 0)
             { EstiloUI.Aviso("El stock mínimo debe ser un número entero mayor o igual a 0."); return; }
 
+            // Validaciones de vencimiento
+            int diasRestantes = (dtpVence.Value.Date - DateTime.Today).Days;
+
+            if (diasRestantes < 0 && idSeleccionado == 0)
+            {
+                EstiloUI.Aviso("No se puede registrar un medicamento con fecha de vencimiento anterior a hoy.");
+                return;
+            }
+            if (diasRestantes < 0)
+            {
+                if (!EstiloUI.Confirmar("Este medicamento ya está vencido.\n\n¿Guardar los cambios de todos modos?")) return;
+            }
+            else if (diasRestantes <= 30)
+            {
+                if (!EstiloUI.Confirmar("Este medicamento vence en " + diasRestantes + " día(s).\n\n¿Desea guardarlo de todos modos?")) return;
+            }
+
             var m = new Medicamento
             {
                 IdMedicamento = idSeleccionado,

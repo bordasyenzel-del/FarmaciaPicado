@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
 using System.Linq;
-using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using ClosedXML.Excel;
 using Guna.UI2.WinForms;
@@ -14,8 +14,14 @@ using FarmaciaPicado.Orm;
 namespace FarmaciaPicado
 {
     // Reportes dinámicos: las consultas se arman con LINQ (EF Core) según los filtros elegidos.
+    // Cada proceso se ejecuta en segundo plano y, si tarda, muestra la ventana de carga
+    // con el botón «Cancelar».
     public partial class FrmReportes : Form
     {
+        // Milisegundos que debe tardar un proceso para que aparezca la ventana de carga.
+        // Ponlo en 0 si quieres que aparezca siempre (por ejemplo, para una demostración).
+        private const int MostrarCargaTrasMs = 200;
+
         private readonly ReporteServicioEf reportes = new ReporteServicioEf();
         private readonly CategoriaServicioEf categoriasSvc = new CategoriaServicioEf();
 
@@ -25,6 +31,7 @@ namespace FarmaciaPicado
         private Guna2Button[] pestanas;
         private int pestanaActual = 0;
         private bool cargando = true;
+        private bool ocupado = false;
 
         private Panel grpDesde, grpHasta, grpCategoria, grpTipo, grpDias, grpBuscar;
         private Guna2DateTimePicker dtpDesde, dtpHasta;
@@ -100,12 +107,12 @@ namespace FarmaciaPicado
             dtpHasta.Value = DateTime.Today;
 
             cboCategoria = EstiloUI.Combo();
-            cboCategoria.SelectedIndexChanged += (s, e) => { if (!cargando) Generar(); };
+            cboCategoria.SelectedIndexChanged += (s, e) => { if (!cargando && !ocupado) Generar(); };
 
             cboTipo = EstiloUI.Combo();
             cboTipo.Items.AddRange(new object[] { "Todos", "Entrada", "Salida" });
             cboTipo.SelectedIndex = 0;
-            cboTipo.SelectedIndexChanged += (s, e) => { if (!cargando) Generar(); };
+            cboTipo.SelectedIndexChanged += (s, e) => { if (!cargando && !ocupado) Generar(); };
 
             txtDias = EstiloUI.Caja("30");
             txtDias.Text = "30";
@@ -179,10 +186,43 @@ namespace FarmaciaPicado
         }
 
         // =====================================================================
+        //  VENTANA DE CARGA CON BOTÓN CANCELAR
+        // =====================================================================
+        // Ejecuta el trabajo en segundo plano. Si tarda más de MostrarCargaTrasMs,
+        // aparece la ventana de carga; al pulsar «Cancelar» se cancela el token.
+        // Si el usuario cancela, se lanza OperationCanceledException.
+        private async Task<T> ConCarga<T>(string mensaje, Func<CancellationToken, Task<T>> trabajo)
+        {
+            using (var cts = new CancellationTokenSource())
+            using (var dialogo = new DialogoProgreso(mensaje, cts))
+            {
+                try
+                {
+                    Task<T> tarea = Task.Run(() => trabajo(cts.Token));
+
+                    if (MostrarCargaTrasMs <= 0 || await Task.WhenAny(tarea, Task.Delay(MostrarCargaTrasMs)) != tarea)
+                        dialogo.Show(this);
+
+                    return await tarea;
+                }
+                catch (Exception) when (cts.IsCancellationRequested)
+                {
+                    // SQL Server puede reportar la cancelación con otra excepción: se unifica aquí
+                    throw new OperationCanceledException(cts.Token);
+                }
+                finally
+                {
+                    dialogo.CerrarDialogo();
+                }
+            }
+        }
+
+        // =====================================================================
         //  PESTAÑAS Y FILTROS
         // =====================================================================
         private void Mostrar(int indice)
         {
+            if (ocupado) return;
             pestanaActual = indice;
 
             for (int i = 0; i < pestanas.Length; i++)
@@ -214,28 +254,40 @@ namespace FarmaciaPicado
             EstiloUI.DesactivarOrden(dgv);
         }
 
-        private void Generar()
+        private async void Generar()
         {
-            if (cargando) return;
+            if (cargando || ocupado) return;
+            ocupado = true;
 
             dgv.Rows.Clear();
             dgv.Columns.Clear();
+            lblConteo.Text = "";
 
             try
             {
                 switch (pestanaActual)
                 {
-                    case 0: ReporteStockBajo(); break;
-                    case 1: ReporteProximosVencer(); break;
-                    case 2: ReporteMovimientos(); break;
-                    case 3: ReporteRotacion(); break;
-                    default: ReporteInventario(); break;
+                    case 0: await ReporteStockBajo(); break;
+                    case 1: await ReporteProximosVencer(); break;
+                    case 2: await ReporteMovimientos(); break;
+                    case 3: await ReporteRotacion(); break;
+                    default: await ReporteInventario(); break;
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                dgv.Rows.Clear();
+                dgv.Columns.Clear();
+                lblConteo.Text = "Operación cancelada por el usuario";
             }
             catch (Exception ex)
             {
                 lblConteo.Text = "";
                 EstiloUI.Error("No se pudo generar el reporte:\n" + ex.Message);
+            }
+            finally
+            {
+                ocupado = false;
             }
 
             dgv.ClearSelection();
@@ -245,9 +297,12 @@ namespace FarmaciaPicado
         // =====================================================================
         //  REPORTES
         // =====================================================================
-        private void ReporteStockBajo()
+        private async Task ReporteStockBajo()
         {
-            var lista = reportes.StockBajo(CategoriaSeleccionada());
+            int categoria = CategoriaSeleccionada();
+            var lista = await ConCarga("Generando reporte de stock bajo...",
+                ct => reportes.StockBajoAsync(categoria, ct));
+
             Columnas("Medicamento", "Presentación", "Categoría", "Stock actual", "Stock mínimo", "Vence");
 
             foreach (var m in lista)
@@ -259,15 +314,19 @@ namespace FarmaciaPicado
             lblConteo.Text = lista.Count + " medicamento(s) con stock bajo";
         }
 
-        private void ReporteProximosVencer()
+        private async Task ReporteProximosVencer()
         {
-            if (!int.TryParse(txtDias.Text, out int dias) || dias < 0)
+            // Validación del filtro de días
+            if (!int.TryParse(txtDias.Text, out int dias) || dias < 0 || dias > 3650)
             {
-                EstiloUI.Aviso("Ingrese un número de días válido (0 o más).");
+                EstiloUI.Aviso("Ingrese un número de días válido (entre 0 y 3650).");
                 return;
             }
 
-            var lista = reportes.ProximosVencer(dias, CategoriaSeleccionada());
+            int categoria = CategoriaSeleccionada();
+            var lista = await ConCarga("Buscando medicamentos próximos a vencer...",
+                ct => reportes.ProximosVencerAsync(dias, categoria, ct));
+
             Columnas("Medicamento", "Presentación", "Categoría", "Stock", "Vence", "Estado");
 
             foreach (var m in lista)
@@ -277,12 +336,16 @@ namespace FarmaciaPicado
 
                 int i = dgv.Rows.Add(m.Nombre, m.Presentacion, m.Categoria, m.StockActual,
                                      m.FechaVencimiento.ToString("dd/MM/yyyy"), estado);
-                dgv.Rows[i].Cells[5].Style.ForeColor = faltan <= 0 ? EstiloUI.Rojo : EstiloUI.Naranja;
+
+                // Vencidos y los que vencen en 7 días o menos: rojo. El resto: naranja.
+                dgv.Rows[i].Cells[5].Style.ForeColor = faltan <= 7 ? EstiloUI.Rojo : EstiloUI.Naranja;
             }
-            lblConteo.Text = lista.Count + " medicamento(s) vencidos o que vencen en " + dias + " días";
+
+            int vencidos = lista.Count(m => m.FechaVencimiento.Date < DateTime.Today);
+            lblConteo.Text = lista.Count + " medicamento(s)  |  Vencidos: " + vencidos;
         }
 
-        private void ReporteMovimientos()
+        private async Task ReporteMovimientos()
         {
             if (dtpDesde.Value.Date > dtpHasta.Value.Date)
             {
@@ -290,8 +353,14 @@ namespace FarmaciaPicado
                 return;
             }
 
+            DateTime desde = dtpDesde.Value;
+            DateTime hasta = dtpHasta.Value;
             string tipo = cboTipo.SelectedItem as string ?? "Todos";
-            var lista = reportes.Movimientos(dtpDesde.Value, dtpHasta.Value, tipo, txtBuscar.Text.Trim());
+            string texto = txtBuscar.Text.Trim();
+
+            var lista = await ConCarga("Consultando movimientos...",
+                ct => reportes.MovimientosAsync(desde, hasta, tipo, texto, ct));
+
             Columnas("Fecha", "Tipo", "Medicamento", "Cantidad", "Usuario");
 
             foreach (var mov in lista)
@@ -305,7 +374,7 @@ namespace FarmaciaPicado
             lblConteo.Text = lista.Count + " movimiento(s)  |  Entradas: " + entradas + "  Salidas: " + salidas;
         }
 
-        private void ReporteRotacion()
+        private async Task ReporteRotacion()
         {
             if (dtpDesde.Value.Date > dtpHasta.Value.Date)
             {
@@ -313,7 +382,13 @@ namespace FarmaciaPicado
                 return;
             }
 
-            var lista = reportes.Rotacion(dtpDesde.Value, dtpHasta.Value, CategoriaSeleccionada());
+            DateTime desde = dtpDesde.Value;
+            DateTime hasta = dtpHasta.Value;
+            int categoria = CategoriaSeleccionada();
+
+            var lista = await ConCarga("Calculando la rotación...",
+                ct => reportes.RotacionAsync(desde, hasta, categoria, ct));
+
             Columnas("Medicamento", "Categoría", "Entradas", "Salidas", "Stock actual");
 
             foreach (var r in lista)
@@ -325,9 +400,11 @@ namespace FarmaciaPicado
             lblConteo.Text = lista.Count + " medicamento(s) analizados";
         }
 
-        private void ReporteInventario()
+        private async Task ReporteInventario()
         {
-            var lista = reportes.InventarioPorCategoria();
+            var lista = await ConCarga("Calculando el valor del inventario...",
+                ct => reportes.InventarioPorCategoriaAsync(ct));
+
             Columnas("Categoría", "Medicamentos", "Unidades", "Valor de compra", "Valor de venta", "Margen potencial");
 
             foreach (var c in lista)
@@ -343,6 +420,7 @@ namespace FarmaciaPicado
                                    compra, venta, venta - compra);
             for (int k = 3; k <= 5; k++)
                 dgv.Columns[k].DefaultCellStyle.Format = "C2";
+
             dgv.Rows[idx].DefaultCellStyle.Font = new Font("Segoe UI Semibold", 9.5F);
             dgv.Rows[idx].DefaultCellStyle.BackColor = EstiloUI.Fondo;
 
@@ -352,14 +430,17 @@ namespace FarmaciaPicado
         // =====================================================================
         //  EXPORTAR A EXCEL (.xlsx)
         // =====================================================================
-        private void ExportarExcel()
+        private async void ExportarExcel()
         {
+            if (ocupado) return;
+
             if (dgv.Rows.Count == 0)
             {
                 EstiloUI.Aviso("No hay datos para exportar. Genere un reporte primero.");
                 return;
             }
 
+            string ruta;
             using (var dialogo = new SaveFileDialog())
             {
                 dialogo.Filter = "Libro de Excel (*.xlsx)|*.xlsx";
@@ -367,64 +448,91 @@ namespace FarmaciaPicado
                                    + "_" + DateTime.Now.ToString("yyyyMMdd_HHmm") + ".xlsx";
 
                 if (dialogo.ShowDialog() != DialogResult.OK) return;
+                ruta = dialogo.FileName;
+            }
 
-                try
+            // La tabla solo puede leerse desde el hilo de la interfaz: se copian los datos antes
+            string hoja = nombres[pestanaActual];
+            string[] encabezados = dgv.Columns.Cast<DataGridViewColumn>().Select(c => c.HeaderText).ToArray();
+            var filas = new List<object[]>();
+            foreach (DataGridViewRow fila in dgv.Rows)
+                filas.Add(fila.Cells.Cast<DataGridViewCell>().Select(c => c.Value).ToArray());
+
+            ocupado = true;
+            try
+            {
+                await ConCarga("Exportando a Excel...",
+                    ct => Task.Run(() => { EscribirExcel(ruta, hoja, encabezados, filas, ct); return true; }, ct));
+
+                if (EstiloUI.Confirmar("Reporte exportado correctamente.\n\n¿Desea abrir el archivo ahora?"))
+                    Process.Start(new ProcessStartInfo(ruta) { UseShellExecute = true });
+            }
+            catch (OperationCanceledException)
+            {
+                try { if (System.IO.File.Exists(ruta)) System.IO.File.Delete(ruta); } catch { }
+                EstiloUI.Info("Exportación cancelada.");
+            }
+            catch (Exception ex)
+            {
+                EstiloUI.Error("No se pudo exportar:\n" + ex.Message);
+            }
+            finally
+            {
+                ocupado = false;
+            }
+        }
+
+        private static void EscribirExcel(string ruta, string nombreHoja, string[] encabezados, List<object[]> filas, CancellationToken ct)
+        {
+            using (var libro = new XLWorkbook())
+            {
+                var hoja = libro.Worksheets.Add(nombreHoja);
+
+                // Encabezados
+                for (int c = 0; c < encabezados.Length; c++)
                 {
-                    using (var libro = new XLWorkbook())
+                    var celda = hoja.Cell(1, c + 1);
+                    celda.Value = encabezados[c];
+                    celda.Style.Font.Bold = true;
+                    celda.Style.Font.FontColor = XLColor.White;
+                    celda.Style.Fill.BackgroundColor = XLColor.FromHtml("#2563EB");
+                }
+
+                // Datos (los números se guardan como números, no como texto)
+                int numeroFila = 2;
+                foreach (object[] fila in filas)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    for (int c = 0; c < fila.Length; c++)
                     {
-                        var hoja = libro.Worksheets.Add(nombres[pestanaActual]);
+                        object valor = fila[c];
+                        var celda = hoja.Cell(numeroFila, c + 1);
 
-                        // Encabezados
-                        for (int c = 0; c < dgv.Columns.Count; c++)
+                        if (valor is decimal d)
                         {
-                            var celda = hoja.Cell(1, c + 1);
-                            celda.Value = dgv.Columns[c].HeaderText;
-                            celda.Style.Font.Bold = true;
-                            celda.Style.Font.FontColor = XLColor.White;
-                            celda.Style.Fill.BackgroundColor = XLColor.FromHtml("#2563EB");
+                            celda.Value = d;
+                            celda.Style.NumberFormat.Format = "\"C$\"#,##0.00";
                         }
-
-                        // Datos (los números se guardan como números, no como texto)
-                        int fila = 2;
-                        foreach (DataGridViewRow r in dgv.Rows)
+                        else if (valor is int n)
                         {
-                            for (int c = 0; c < dgv.Columns.Count; c++)
-                            {
-                                object valor = r.Cells[c].Value;
-                                var celda = hoja.Cell(fila, c + 1);
-
-                                if (valor is decimal d)
-                                {
-                                    celda.Value = d;
-                                    celda.Style.NumberFormat.Format = "\"C$\"#,##0.00";
-                                }
-                                else if (valor is int n)
-                                {
-                                    celda.Value = n;
-                                }
-                                else
-                                {
-                                    celda.Value = Convert.ToString(valor) ?? "";
-                                }
-                            }
-
-                            if (Convert.ToString(r.Cells[0].Value) == "TOTAL")
-                                hoja.Row(fila).Style.Font.Bold = true;
-
-                            fila++;
+                            celda.Value = n;
                         }
-
-                        hoja.Columns().AdjustToContents();
-                        libro.SaveAs(dialogo.FileName);
+                        else
+                        {
+                            celda.Value = Convert.ToString(valor) ?? "";
+                        }
                     }
 
-                    if (EstiloUI.Confirmar("Reporte exportado correctamente.\n\n¿Desea abrir el archivo ahora?"))
-                        Process.Start(new ProcessStartInfo(dialogo.FileName) { UseShellExecute = true });
+                    if (fila.Length > 0 && Convert.ToString(fila[0]) == "TOTAL")
+                        hoja.Row(numeroFila).Style.Font.Bold = true;
+
+                    numeroFila++;
                 }
-                catch (Exception ex)
-                {
-                    EstiloUI.Error("No se pudo exportar:\n" + ex.Message);
-                }
+
+                ct.ThrowIfCancellationRequested();
+                hoja.Columns().AdjustToContents();
+                libro.SaveAs(ruta);
             }
         }
     }
