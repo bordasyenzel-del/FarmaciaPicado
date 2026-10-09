@@ -72,4 +72,5 @@ namespace FarmaciaPicado.Negocio
                 throw new Exception("Debe seleccionar una categoría.");
         }
     }
+//banano me llamo yo
 }
