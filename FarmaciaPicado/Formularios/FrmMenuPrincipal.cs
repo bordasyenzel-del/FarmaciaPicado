@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using FarmaciaPicado.Negocio;
 using System.Windows.Forms.DataVisualization.Charting;
 using Guna.UI2.WinForms;
 using FarmaciaPicado.AccesoDatos;
 using FarmaciaPicado.Entidades;
 using FarmaciaPicado.Orm;
+
 
 //ANTES DE TOCAR ESTE MENÚ SE RECOMIENDA REZAR 2 PADRES NUESTROS Y 5 AVES MARIAS PORQUE SOLO DIOS SABE COMO FUNCIONA
 
@@ -53,6 +55,8 @@ namespace FarmaciaPicado
         private Label lblUsuarioActivo;
         private Label lblRolActivo;
         private Guna2Button btnMedicamentos, btnCategorias, btnEntradas, btnSalidas, btnUsuarios, btnReportes;
+        private Guna2Button btnTipoCambio;
+        private Label lblTipoCambio;
 
         public FrmMenuPrincipal(int idUsuario, string nombreUsuario, string rol)
         {
@@ -177,6 +181,7 @@ namespace FarmaciaPicado
             navPanel.Controls.Add(btnReportes);
             panel.Controls.Add(navPanel);
 
+
             var btnCerrarSesion = new Guna2Button
             {
                 Text = "⏻  Cerrar sesión",
@@ -190,7 +195,33 @@ namespace FarmaciaPicado
             btnCerrarSesion.Click += BtnCerrarSesion_Click;
             panel.Controls.Add(btnCerrarSesion);
 
+
             return panel;
+        }
+        // Entregable 7: consume el servicio web REST y muestra el tipo de cambio, Por Dios ojala que Funcione.
+        private async void BtnTipoCambio_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                btnTipoCambio.Enabled = false;
+                lblTipoCambio.Text = "Consultando...";
+
+                var negocio = new TipoCambioNegocio();
+                decimal valor = await negocio.ObtenerValorDolarAsync("NIO");
+
+                lblTipoCambio.Text = $"1 USD = C$ {valor:N2}";
+                lblTipoCambio.ForeColor = ColorVerde;
+            }
+            catch (Exception ex)
+            {
+                lblTipoCambio.Text = "1 USD = --";
+                MessageBox.Show("No se pudo consultar el servicio web:\n" + ex.Message,
+                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                btnTipoCambio.Enabled = true;
+            }
         }
 
         private Guna2Button CrearBotonNav(string texto)
@@ -244,6 +275,31 @@ namespace FarmaciaPicado
                 Padding = new Padding(0, 14, 24, 0)
             };
 
+            btnTipoCambio = new Guna2Button
+            {
+                Text = "💱  Tipo de cambio",
+                Size = new Size(200, 36),
+                Location = new Point(330, 17),
+                FillColor = ColorAzul,
+                ForeColor = Color.White,
+                BorderRadius = 8,
+                Font = new Font("Segoe UI Semibold", 9.5F)
+            };
+            btnTipoCambio.Click += BtnTipoCambio_Click;
+
+            lblTipoCambio = new Label
+            {
+                Text = "1 USD = --",
+                Font = new Font("Segoe UI Semibold", 10F),
+                ForeColor = ColorTextoSuave,
+                BackColor = Color.Transparent,
+                Location = new Point(515, 24),
+                AutoSize = true
+            };
+
+
+            panel.Controls.Add(btnTipoCambio);
+            panel.Controls.Add(lblTipoCambio);
             panel.Controls.Add(lblFecha);
             panel.Controls.Add(lblTitulo);
             panel.Controls.Add(lblSubtitulo);
